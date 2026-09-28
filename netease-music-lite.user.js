@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         网易云音乐 · 精简版（听歌 / 搜索 / 我的音乐）
 // @namespace    https://music.163.com/
-// @version      4.7.0
-// @description  把网易云音乐网页版重做成深蓝夜色的三页签播放器：听歌（大封面 + 歌词上方的完整播放控制台：上一首/播放暂停/下一首、进度条、播放模式、音量、可展开点歌的播放列表、收藏、分享、下载 + 可点赞的评论 + 悬停放大/点击跳转的歌词 + 音质选择 + 专辑/歌手点进去看详情、歌手带简介）、搜索（歌曲/歌手/专辑/歌单）、我的音乐。取流按 PC 客户端姿态发（os=pc / appver），网页播放器不给播时需要同一账号在客户端能播的内容，脚本会直接取流播放并支持下载（下载默认重定向到系统「音乐」文件夹，并附一份同名双语 .lrc 歌词；歌词本身带时间轴同步：翻译 / 罗马音 / 逐字点亮）。站点导航与内容区移除，底部播放条整体让位 —— 它的全部功能都搬到听歌页歌词上方。
+// @version      4.8.0
+// @description  把网易云音乐网页版重做成深蓝夜色的三页签播放器：听歌（大封面 + 歌词上方的完整播放控制台：上一首/播放暂停/下一首、进度条、播放模式、音量、可展开点歌的播放列表、收藏、分享 + 可点赞的评论 + 时间轴歌词（翻译 / 罗马音 / 逐字） + 音质选择 + 专辑/歌手点进去看详情）、搜索（歌曲/歌手/专辑/歌单）、我的音乐。站点导航与内容区移除，底部播放条整体让位。**仅供个人学习研究、非商业用途**：涉及「伪装客户端姿态取流」「下载」的功能默认关闭，需自行在 CONFIG 里打开，详见脚本顶部免责声明。
 // @author       TanPass
 // @match        https://music.163.com/*
 // @match        https://www.music.163.com/*
@@ -10,6 +10,45 @@
 // @run-at       document-start
 // @grant        none
 // ==/UserScript==
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ *  免责声明（请先读完再使用 / DISCLAIMER）
+ * ═══════════════════════════════════════════════════════════════════════════
+ *
+ *  1. 本脚本仅供**个人学习、研究与技术交流**使用，**严禁任何商业用途**，
+ *     也不得用于批量抓取、二次分发内容或搭建任何形式的下载/试听服务。
+ *
+ *  2. 本脚本不绕过任何付费：账号没有的权限（VIP / 数字专辑等），接口照样
+ *     返回空地址，脚本只会如实提示。请通过官方渠道支持你喜欢的音乐。
+ *
+ *  3. 使用本脚本可能违反网易云音乐的《服务条款》（例如使用非官方客户端、
+ *     自动化调用接口），后果由使用者**自行承担**，包括但不限于账号被限流
+ *     或封禁。
+ *
+ *  4. 「伪装 PC 客户端姿态取流」与「下载」这两类功能**默认关闭**，因为它们
+ *     在部分法域可能触及"避开技术措施"或复制他人作品的红线。是否开启由你
+ *     自行决定并承担全部后果（开关位置与打开方法见下方 CONFIG 与 README）。
+ *
+ *  5. 音乐、歌词、封面等一切内容的著作权归原作者与权利人所有。请在下载或
+ *     缓存后 **24 小时内删除**，不要留存、传播或用于任何公开场合。
+ *
+ *  6. 本脚本按"现状"提供，不附带任何明示或默示担保。作者不对使用本脚本
+ *     造成的任何直接或间接损失负责。
+ *
+ *  7. 若你是权利人且认为本脚本侵犯了你的权益，请提 issue 或来信，我会在
+ *     第一时间删除相关内容。
+ *
+ *  8. 下载、安装或使用本脚本，即表示你已阅读、理解并同意以上全部条款。
+ *     如果你不同意，请立即停止使用并删除本脚本。
+ *
+ *  ---------------------------------------------------------------------------
+ *  DISCLAIMER (English, summary): For personal study and research only. No
+ *  commercial use. No paywall bypass. Two sensitive features (client-posture
+ *  spoofing and downloading) are DISABLED by default — enable them in CONFIG
+ *  at your own risk. All music/lyrics copyrights belong to their owners; delete
+ *  any downloaded copy within 24 hours. Provided "as is", without warranty.
+ *  ---------------------------------------------------------------------------
+ */
 
 /*
  * ───────────────────────────────────────────────────────────────────────────
@@ -137,10 +176,15 @@
  *       · 两者都写诊断（window.__nm3LikeLog）。未登录回 301、风控回 -460/-462、
  *         接口变了回 404 —— 这些原因现在都会如实显示，不再是笼统一句「失败」。
  *
- *     下载：控制台上的下载按钮，按当前音质档位取流（同样带客户端姿态），
+ *     ★★ 下载与「客户端姿态取流」都是**默认关闭**的敏感功能（见脚本顶部免责
+ *     声明 + CONFIG 里的 ALLOW_DOWNLOAD / ALLOW_CLIENT_SPOOF）。下面两段描述的是
+ *     **打开开关之后**的行为：
+ *
+ *     下载：控制台上的下载按钮（ALLOW_DOWNLOAD = true 才出现），按当前音质档位取流，
  *     fetch 成 blob 交给 <a download> 存盘，边下边在按钮上显示百分比；取不到
  *     地址就如实说明（VIP / 客户端授权的内容，账号没权限就是没有）。流式读取
- *     带停滞超时 + 总超时，失败时退回新标签页打开音频地址。
+ *     带停滞超时 + 总超时，失败时退回新标签页打开音频地址。downloadCurrent()
+ *     里还有一道兜底判断：开关关着时从控制台调它也只会提示去开开关。
  *
  *     下载位置默认重定向到系统「音乐」文件夹：网页改不了浏览器的默认下载目录，
  *     所以走 File System Access API —— 第一次下载时选择框直接开在「音乐」文件夹，
@@ -149,13 +193,15 @@
  *     API（Firefox / Safari）或用户取消时，原样退回浏览器默认下载目录。
  *     顺便附一份**同名双语 .lrc**（带时间轴，原文 + 翻译同时间戳两行，国内播放器
  *     按这个认双语）：本地播放器靠同名自动加载，所以文件名跟着实际音频名走，
- *     而且同名直接覆盖；CONFIG.DOWNLOAD_LRC = false 可以关掉。
+ *     而且同名直接覆盖；CONFIG.DOWNLOAD_LRC 单独控制要不要写它（同样默认关闭）。
  *
- *     客户端姿态（模拟 PC 客户端）：取流请求统一带 os=pc / appver / channel /
- *     osver，并在 cookie 里补一个 os=pc；网页播放器自己判定不播、而接口还能给流
- *     的时候，脚本按这套姿态自己取流喂给 <audio> 播出来（rescuePlayback）——
- *     这就是「客户端能放、网页不给放」那类内容的落地办法。注意这不是绕付费：
- *     账号没权限的内容接口照样回 url=null，脚本只会如实提示。
+ *     客户端姿态（模拟 PC 客户端）：**默认关闭**（CONFIG.ALLOW_CLIENT_SPOOF）。
+ *     打开后：取流请求统一带 os=pc / appver / channel / osver，并在 cookie 里补一个
+ *     os=pc；网页播放器自己判定不播、而接口还能给流的时候，脚本按这套姿态自己取流
+ *     喂给 <audio> 播出来（rescuePlayback）—— 这就是「客户端能放、网页不给放」那类
+ *     内容的落地办法。注意这不是绕付费：账号没权限的内容接口照样回 url=null，
+ *     脚本只会如实提示。**关着的时候**这些行为全部不发生：不塞 cookie、不追加参数、
+ *     不做救场，收藏/点赞也不再带客户端姿态（代价是更容易撞风控 -460，见 README）。
  *
  *     进度条仍是全站唯一一根，就在这一排的上方：点一下跳转、按住左右拖动、
  *     悬停显示目标时间；内凹暗槽 + 已缓存片段（读 <audio>.buffered）+ 深蓝到
@@ -175,9 +221,28 @@
     COMMENT_LIMIT: 20,         // 评论每页多少条
     MAX_PLAYLIST_TRACKS: 1000, // 单个歌单最多读多少首
     SONG_DETAIL_BATCH: 500,    // /api/song/detail 单次批量上限
-    DOWNLOAD_SUBDIR: '',       // 下载目录：选定「音乐」文件夹后再往里放的子文件夹名（空=直接放音乐文件夹）
-    DOWNLOAD_LRC: true,        // 下载时顺便把双语 .lrc（带时间轴）写到同一个文件夹
-    TICK: 300                  // 轮询间隔（毫秒）
+    TICK: 300,                 // 轮询间隔（毫秒）
+
+    /* ────────────────────────────────────────────────────────────────
+     * ★★ 下面三个是**默认关闭**的敏感开关 —— 打开它们之前请先读脚本顶部的
+     *    「免责声明」。开关位置就在这一行下面（脚本第 178~181 行附近），
+     *    把 false 改成 true 保存、刷新页面即生效。
+     * ──────────────────────────────────────────────────────────────── */
+
+    // ① 伪装 PC 客户端姿态取流（os=pc / appver / channel / osver，含"救场播放"）。
+    //    打开后：网页播放器不给播、但客户端能播的那类内容，脚本会按客户端口径
+    //    自己取流播出来。风险自担 —— 这可能被认定为"避开访问控制技术措施"。
+    ALLOW_CLIENT_SPOOF: false,
+
+    // ② 下载（把音频存成本地文件）。打开后控制台上才会出现下载按钮。
+    //    这是权利方最常点名的一类功能，请自行评估。
+    ALLOW_DOWNLOAD: false,
+
+    // ③ 下载时顺带写双语 .lrc（带时间轴的歌词文件）。只在上一条打开时有效。
+    //    歌词本身也是受著作权保护的作品，单独作为一个开关。
+    DOWNLOAD_LRC: false,
+
+    DOWNLOAD_SUBDIR: ''        // 下载目录：选定「音乐」文件夹后再往里放的子文件夹名（空=直接放音乐文件夹）
   };
 
   const PALETTE = {
@@ -2465,7 +2530,9 @@
       time: '3',
       csrf_token: csrfToken()
     });
-    Object.keys(CLIENT_SIGN).forEach((k) => { if (!params.has(k)) params.set(k, CLIENT_SIGN[k]); });
+    if (clientSpoofOn()) {
+      Object.keys(CLIENT_SIGN).forEach((k) => { if (!params.has(k)) params.set(k, CLIENT_SIGN[k]); });
+    }
     const res = await sendForm('/api/radio/like', params);
     likeDiag('radio-like', { songId: songId, like: !!like, code: res.code, msg: res.msg });
     return res;
@@ -2700,9 +2767,13 @@
             SVG.like(15, 'currentColor') + '</button>' +
           '<button class="nm3-cbtn" type="button" data-act="ctl-list" id="nm3-ctl-list" title="播放列表">' +
             SVG.list(15, 'currentColor') + '<em id="nm3-ctl-count"></em></button>' +
-          '<button class="nm3-cbtn" type="button" data-act="dl-current" id="nm3-ctl-dl" ' +
-            'title="下载这首（按当前音质，存到音乐文件夹）；Shift + 点击重选文件夹">' +
-            SVG.download(15, 'currentColor') + '<span></span></button>' +
+          // ★ 下载按钮只在 CONFIG.ALLOW_DOWNLOAD = true 时出现（默认关闭）。
+          //   为什么默认关、怎么打开，见脚本顶部免责声明与 README。
+          (downloadAllowed()
+            ? '<button class="nm3-cbtn" type="button" data-act="dl-current" id="nm3-ctl-dl" ' +
+              'title="下载这首（按当前音质，存到音乐文件夹）；Shift + 点击重选文件夹">' +
+              SVG.download(15, 'currentColor') + '<span></span></button>'
+            : '') +
           '<button class="nm3-cbtn" type="button" data-act="ctl-share" title="分享" ' +
             'id="nm3-ctl-share">' + SVG.share(15, 'currentColor') + '</button>' +
         '</div>' +
@@ -3043,10 +3114,22 @@
    * 说清楚边界：**这不是绕付费**。账号没有的权限（VIP / 数字专辑）接口照样回
    * url=null，脚本只会如实提示；它解决的是「同一账号、客户端能放而网页播放器
    * 不放」这一类。
+   *
+   * ★★ 上面 1~4 全部由 **CONFIG.ALLOW_CLIENT_SPOOF** 控制，**默认关闭**
+   *    （只改写 level 这个音质功能不受影响）。默认状态下不塞 cookie、不追加
+   *    客户端参数、不做救场 —— 见脚本顶部免责声明第 4 条。
    */
   const CLIENT_SIGN = { os: 'pc', appver: '8.9.70', channel: 'netease', osver: '10.0.19045' };
 
+  /**
+   * ★ 客户端姿态伪装的总开关，**默认关闭**。
+   *   位置：脚本顶部 CONFIG.ALLOW_CLIENT_SPOOF（默认 false），改成 true 才生效。
+   *   理由见脚本顶部免责声明第 4 条：这可能被认定为"避开访问控制技术措施"。
+   */
+  function clientSpoofOn() { return CONFIG.ALLOW_CLIENT_SPOOF === true; }
+
   function clientSignQuery(url) {
+    if (!clientSpoofOn()) return url;      // ★ 默认关闭：不追加 os=pc / appver 这套参数
     let out = url;
     Object.keys(CLIENT_SIGN).forEach((k) => {
       if (new RegExp('[?&]' + k + '=').test(out)) return;
@@ -3055,8 +3138,9 @@
     return out;
   }
 
-  /** cookie 里补 os=pc 等（只补不覆盖），让接口按 PC 客户端姿态看这次会话 */
+  /** cookie 里补 os=pc 等（只补不覆盖），让接口按 PC 客户端姿态看这次会话。★ 默认关闭 */
   function markClientCookie() {
+    if (!clientSpoofOn()) return;          // ★ 默认关闭：不往会话 cookie 里塞客户端标识
     try {
       Object.keys(CLIENT_SIGN).forEach((k) => {
         if (new RegExp('(?:^|;\\s*)' + k + '=').test(document.cookie || '')) return;
@@ -3065,15 +3149,17 @@
     } catch (e) { /* noop */ }
   }
 
-  /** 带客户端姿态取一次流；拿不到地址返回 null */
+  /** 取一次流；拿不到地址返回 null。★ 只有打开 ALLOW_CLIENT_SPOOF 才会带客户端姿态 */
   async function fetchPlayUrl(songId, level) {
     const flac = level === 'lossless' || level === 'hires' || level === 'jymaster';
-    const d = await apiGet(URL_API, Object.assign({
+    const params = {
       ids: JSON.stringify([songId]),
       level: level,
       encodeType: flac ? 'flac' : 'aac',
       __nm3probe: 1
-    }, CLIENT_SIGN));
+    };
+    if (clientSpoofOn()) Object.assign(params, CLIENT_SIGN);   // ★ 默认关闭：网页口径取流
+    const d = await apiGet(URL_API, params);
     const it = d && d.data && d.data[0];
     return (it && it.url) ? it : null;
   }
@@ -3121,6 +3207,10 @@
   }
 
   function maybeRescue() {
+    // ★ 救场的本质就是"按客户端姿态取流"，所以跟随 ALLOW_CLIENT_SPOOF 一起默认关闭。
+    //   关掉后：站点自己的正常播放完全不受影响，只是"客户端能听、网页不给听"那类
+    //   不再由脚本接管（不打开开关就别去碰这块，见脚本顶部免责声明）。
+    if (!clientSpoofOn()) return;
     const a = audioEl();
     if (!a || !curTrackId) return;
     if (Date.now() - curTrackSince < 2200) return;      // 给站点正常的加载时间
@@ -3132,6 +3222,14 @@
   }
 
   /* ── 下载 ── */
+
+  /**
+   * ★ 下载功能的总开关，**默认关闭**。
+   *   位置：脚本顶部 CONFIG.ALLOW_DOWNLOAD（默认 false），改成 true 控制台上才会
+   *   出现下载按钮；同处还有 CONFIG.DOWNLOAD_LRC 控制要不要连歌词文件一起写。
+   *   理由见脚本顶部免责声明第 4 条：下载是权利方最常点名的一类功能。
+   */
+  function downloadAllowed() { return CONFIG.ALLOW_DOWNLOAD === true; }
 
   const downloadState = { busy: false, pct: 0 };
 
@@ -3362,6 +3460,11 @@
   }
 
   async function downloadCurrent(level, opts) {
+    // ★ 默认关闭：即使有人从控制台直接调这个函数，也挡在这里
+    if (!downloadAllowed()) {
+      toast('下载功能默认关闭。要开启：把脚本里 CONFIG.ALLOW_DOWNLOAD 改成 true 再刷新页面（见脚本顶部免责声明）', 6000);
+      return;
+    }
     const np = nowPlaying();
     const track = np && np.track;
     if (!track) { toast('还没有正在播放的歌曲'); return; }
