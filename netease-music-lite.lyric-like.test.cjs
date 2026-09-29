@@ -381,9 +381,10 @@ function buildLyricApi() {
     `;
     const factory = new Function(
       'document', 'window', 'fetch', 'apiGet', 'getUid', 'nowPlaying', 'forwardCtl',
-      'updateControlsUi', 'fmtCount', 'toast', 'warn', 'URLSearchParams',
+      'updateControlsUi', 'fmtCount', 'toast', 'warn', 'log', 'clientSpoofOn', 'URLSearchParams',
       prelude + block + `
-      return { doLike, postCommentLike, postRadioLike, likeComment, likeFailText, likedIdsOf,
+      return { doLike, postCommentLike, postRadioLike, postRadioLikeV1, postPlaylistLike,
+               likeComment, likeFailText, likeFailFrom, likedIdsOf, likedPlaylistId,
                ensureLikedSet, isLiked, log: () => likeLog,
                setComments: (sid) => { cmSongId = sid; }, setHot: (h) => { cmHot = h; } };
     `);
@@ -441,7 +442,8 @@ function buildLyricApi() {
       () => ({ track: { id: o.trackId || 999, name: '测试歌' } }),
       () => { subscribeCalls.push('forwardCtl'); return true; },
       () => {}, (n) => String(n),
-      (m) => toasts.push(m), (...a) => warns.push(a),
+      (m) => toasts.push(m), (...a) => warns.push(a), () => {},
+      () => o.spoof === true,
       URLSearchParams
     );
     return { api, fetched, toasts, warns, server, subscribeCalls, btn };
@@ -512,7 +514,7 @@ function buildLyricApi() {
     console.log('ok 9 点赞 UI：成功才动数字，失败说原因');
   }
 
-  /* ── 10. 收藏：接口参数 ── */
+  /* ── 10. 收藏：三条官方口径的路径与参数 ── */
   {
     const h = buildLikeApi({ reply: () => ({ code: 301 }) });
     await h.api.postRadioLike(186016, true);
@@ -523,47 +525,121 @@ function buildLyricApi() {
     assert.strictEqual(q.body.get('like'), 'true');
     assert.strictEqual(q.body.get('time'), '3', "time 是站点写死的 '3'，不是毫秒时间戳");
     assert.strictEqual(q.body.get('csrf_token'), 'dummy');
-    assert.strictEqual(q.body.get('os'), 'pc', '带客户端姿态（实测不带会被 -460 风控）');
+    assert.strictEqual(q.body.get('os'), null, '姿态默认关着：不带 os=pc');
     await h.api.postRadioLike(186016, false);
     assert.strictEqual(h.fetched[1].body.get('like'), 'false', "只有字符串 'false' 才是取消收藏");
-    console.log('ok 10 收藏接口参数（alg/trackId/like/time=3/csrf/客户端姿态）');
+
+    // ① 同一个写接口的 v1 路由：默认（不带姿态）时最靠谱的一条
+    await h.api.postRadioLikeV1(186016, true);
+    const v1 = h.fetched[2];
+    assert.strictEqual(v1.path, '/api/v1/radio/like');
+    assert.strictEqual(v1.body.get('alg'), 'itembased');
+    assert.strictEqual(v1.body.get('trackId'), '186016');
+    assert.strictEqual(v1.body.get('like'), 'true');
+    assert.strictEqual(v1.body.get('time'), '3');
+    assert.strictEqual(v1.body.get('os'), null, 'v1 路由同样不需要客户端姿态');
+
+    // ② 网页版「添加到歌单」那条官方接口（pid = 我喜欢的音乐）
+    await h.api.postPlaylistLike(186016, true);
+    const pl = h.fetched[3];
+    assert.strictEqual(pl.path, '/api/v1/playlist/manipulate/tracks');
+    assert.strictEqual(pl.body.get('op'), 'add');
+    assert.strictEqual(pl.body.get('pid'), '501', 'pid 是 specialType 5 那个歌单');
+    assert.strictEqual(pl.body.get('trackIds'), '[186016]');
+    assert.strictEqual(pl.body.get('imme'), 'true');
+    await h.api.postPlaylistLike(186016, false);
+    assert.strictEqual(h.fetched[4].body.get('op'), 'del', '取消收藏 = op=del');
+
+    // ③ 姿态打开时：这几条写接口也都要带上（证明开关真的接在写接口上）
+    const on = buildLikeApi({ spoof: true, reply: () => ({ code: 301 }) });
+    await on.api.postRadioLike(186016, true);
+    assert.strictEqual(on.fetched[0].body.get('os'), 'pc', '姿态开着时才带 os=pc');
+    await on.api.postRadioLikeV1(186016, true);
+    assert.strictEqual(on.fetched[1].body.get('os'), 'pc');
+
+    assert.ok(/登录/.test(h.api.likeFailText({ code: 301 })));
+    assert.ok(/风控/.test(h.api.likeFailText({ code: -460 })));
+    console.log('ok 10 收藏：/api/radio/like + /api/v1/radio/like + playlist/manipulate/tracks');
   }
 
-  /* ── 11. 收藏全流程：成功 / 接口失败退站点 / 全失败说人话 ── */
+  /* ── 10b. 失败原因：-460 比 code=200（静默无效那条）更值得报出去 ── */
   {
-    // a) 接口成功 → 状态真的变成已收藏 → 报成功
+    const h = buildLikeApi({});
+    assert.strictEqual(h.api.likeFailFrom(['radio-like → code=-460', 'site-subscribe → code=200']).code, -460);
+    assert.strictEqual(h.api.likeFailFrom(['a → code=200', 'b → code=0']).code, 0);
+    assert.strictEqual(h.api.likeFailFrom(['a → code=-460', 'b → code=400']).code, 400);
+    console.log('ok 10b 收藏失败原因：优先报真正的失败 code');
+  }
+
+  /* ── 11. 收藏全流程：多口径依次试 + 状态校验（默认开关下也要能用） ── */
+  {
+    // a) v1 路由成功（老路由 -460 也不影响）→ 状态真的变了 → 报成功
     const ok = buildLikeApi({
-      reply: (p, body, server) => { server.liked.add(body.trackId); return { code: 200 }; }
+      reply: (p, body, server) => {
+        if (p === '/api/v1/radio/like') {
+          if (body.like === 'false') server.liked.delete(body.trackId);
+          else server.liked.add(body.trackId);
+          return { code: 200 };
+        }
+        return { code: -460, msg: '检测到您的网络环境存在风险' };
+      }
     });
     await ok.api.doLike();
-    assert.ok(ok.server.liked.has('999'), '接口成功应当把歌加进「我喜欢的音乐」');
+    assert.ok(ok.server.liked.has('999'), 'v1 路由成功应当把歌加进「我喜欢的音乐」');
     assert.ok(/已收藏/.test(ok.toasts[ok.toasts.length - 1]), '成功提示：' + ok.toasts[ok.toasts.length - 1]);
-    assert.strictEqual(ok.subscribeCalls.length, 0, '接口成功就不用劳烦站点');
+    assert.strictEqual(ok.subscribeCalls.length, 0, '接口成功就不用劳烦站点自己的入口');
 
-    // b) 接口被风控 → 退回复用站点 subscribe（它就是播放条那个 ♡）→ 成功
+    // b) 老路由 + v1 都被风控 → playlist-manipulate 成功（另一条官方口径）
+    const viaPl = buildLikeApi({
+      reply: (p, body, server) => {
+        if (p === '/api/v1/playlist/manipulate/tracks') {
+          JSON.parse(body.trackIds).forEach((id) => server.liked.add(String(id)));
+          return { code: 200 };
+        }
+        return { code: -460, msg: '风控' };
+      }
+    });
+    await viaPl.api.doLike();
+    assert.ok(viaPl.server.liked.has('999'));
+    assert.ok(/已收藏/.test(viaPl.toasts[viaPl.toasts.length - 1]));
+
+    // c) 接口全被风控、站点 subscribe 有效 → 复用站点自己的入口
     const fallback = buildLikeApi({
       nativeWorks: true,
       reply: () => ({ code: -460, msg: '检测到您的网络环境存在风险' })
     });
     await fallback.api.doLike();
-    assert.strictEqual(fallback.subscribeCalls.length, 1, '要退回复用站点自己的收藏入口');
+    assert.ok(fallback.subscribeCalls.indexOf('999') >= 0, '要退回复用站点自己的收藏入口');
     assert.ok(fallback.server.liked.has('999'));
     assert.ok(/已收藏/.test(fallback.toasts[fallback.toasts.length - 1]));
 
-    // c) 两条路都不成 → 不能假装成功，要说原因并留诊断
+    // d) ★ subscribe「存在但静默无效」（内容 iframe 没起来时就是这样）：
+    //    不能再把它当成成功，要继续点原生那颗 ♡ —— 老代码就是卡在这一步
+    const silent = buildLikeApi({
+      nativeExists: true,
+      reply: () => ({ code: -460, msg: '风控' })
+    });
+    await silent.api.doLike();
+    assert.ok(silent.subscribeCalls.indexOf('forwardCtl') >= 0,
+      'subscribe 静默无效时必须继续点原生 ♡（实际调用：' + silent.subscribeCalls.join(',') + '）');
+
+    // e) 几条路都不成 → 不能假装成功，要说原因并留诊断
     const fail = buildLikeApi({ nativeExists: true, reply: () => ({ code: -460, msg: '风控' }) });
     await fail.api.doLike();
     const last = fail.toasts[fail.toasts.length - 1];
     assert.ok(/风控/.test(last), '失败提示要带原因：' + last);
     assert.ok(!fail.server.liked.has('999'), '失败时状态不能变');
     assert.ok(fail.api.log().some((x) => x.tag === 'radio-like' && x.code === -460), '要有诊断留痕');
+    assert.ok(fail.api.log().some((x) => x.tag === 'radio-like-v1'), 'v1 口径也要留诊断');
+    assert.ok(fail.api.log().some((x) => x.tag === 'playlist-manipulate'), 'playlist 口径也要留诊断');
 
-    // d) 未登录：接口回 301 → 提示先登录
+    // f) 未登录：直接提示先登录（不再白打一串写接口）
     const nologin = buildLikeApi({ notLoggedIn: true, reply: () => ({ code: 301 }) });
     await nologin.api.doLike();
     assert.ok(/登录/.test(nologin.toasts[nologin.toasts.length - 1]));
+    assert.strictEqual(nologin.fetched.length, 0, '未登录时不该发写请求');
 
-    // e) 已收藏的歌点一下 = 取消收藏
+    // g) 已收藏的歌点一下 = 取消收藏
     const unlike = buildLikeApi({
       liked: ['999'],
       reply: (p, body, server) => {
@@ -576,7 +652,7 @@ function buildLyricApi() {
     assert.strictEqual(unlike.fetched[0].body.get('like'), 'false', '已经收藏过的应当是取消');
     assert.ok(!unlike.server.liked.has('999'));
     assert.ok(/已取消收藏/.test(unlike.toasts[unlike.toasts.length - 1]));
-    console.log('ok 11 收藏全流程：接口 → 站点入口 → 状态校验 → 说人话');
+    console.log('ok 11 收藏全流程：多口径 → 站点入口 → 状态校验 → 说人话');
   }
 
   /* ── 12. 收藏集合：trackIds 优先，缺了就退 tracks ── */

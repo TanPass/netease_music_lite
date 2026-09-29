@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         网易云音乐 · 精简版（听歌 / 搜索 / 我的音乐）
 // @namespace    https://music.163.com/
-// @version      4.8.0
-// @description  把网易云音乐网页版重做成深蓝夜色的三页签播放器：听歌（大封面 + 歌词上方的完整播放控制台：上一首/播放暂停/下一首、进度条、播放模式、音量、可展开点歌的播放列表、收藏、分享 + 可点赞的评论 + 时间轴歌词（翻译 / 罗马音 / 逐字） + 音质选择 + 专辑/歌手点进去看详情）、搜索（歌曲/歌手/专辑/歌单）、我的音乐。站点导航与内容区移除，底部播放条整体让位。**仅供个人学习研究、非商业用途**：涉及「伪装客户端姿态取流」「下载」的功能默认关闭，需自行在 CONFIG 里打开，详见脚本顶部免责声明。
+// @version      4.9.0
+// @description  把网易云音乐网页版重做成深蓝夜色的三页签播放器：听歌（大封面 + 歌词上方的完整播放控制台：上一首/播放暂停/下一首、进度条、播放模式、音量、可展开点歌的播放列表、收藏、分享 + 可点赞的评论 + 时间轴歌词（翻译 / 罗马音 / 逐字） + 音质选择 + 专辑/歌手点进去看详情）、搜索（歌曲/歌手/专辑/歌单）、我的音乐。站点导航与内容区移除，底部播放条整体让位。歌手页可看**全部歌曲**（可翻页）与**专辑**；收藏走多条官方口径并在服务端核实状态。**仅供个人学习研究、非商业用途**：涉及「伪装客户端姿态取流」「下载」的功能默认关闭，需自行在 CONFIG 里打开，详见脚本顶部免责声明。
 // @author       TanPass
 // @match        https://music.163.com/*
 // @match        https://www.music.163.com/*
@@ -150,11 +150,20 @@
  *     的抽屉以 .wrap 为包含块而被一起缩放 / 错位。
  *
  *     歌手名（带 id 的那些）做成链接，点进歌手详情：详情借用「搜索」视图展示，
- *     数据来自 /api/v1/artist/<id>（名字/封面/简介）+ /api/artist/top/song（热门
- *     曲目）；听歌页的专辑名同样可点（/api/v1/album）。★ id 为 0 / 缺失的不做成
- *     链接（用户上传的翻唱很多是这样，免得去请求 artist/0）；队列对象里缺 id 时用
- *     详情补回来的那份 —— 注意 /api/song/detail 现在只回精简版（没有 ar/al），
- *     所以 songDetail() 走 v3 → v1 → 老接口降级。
+ *     里面是「全部歌曲 / 专辑」两个页签 —— 全部歌曲走
+ *     /api/v1/artist/songs?id=&order=time&limit=&offset=（带 more/total，可翻页），
+ *     专辑走 /api/artist/albums/<id>（同样可翻页；v1 那个路由是 404）；名字 / 头像 /
+ *     简介仍在 /api/v1/artist/<id>。★ 以前只有 /api/artist/top/song，也就是站点那个
+ *     「热门 50 首」，所以歌手页永远只有 50 首、也看不到专辑。
+ *     听歌页的专辑名同样可点（/api/v1/album）。★ id 为 0 / 缺失的不做成链接（用户上传
+ *     的翻唱很多是这样，免得去请求 artist/0）；队列对象里缺 id 时用详情补回来的那份
+ *     —— 注意 /api/song/detail 现在只回精简版（没有 ar/al），所以 songDetail() 走
+ *     v3 → v1 → 老接口降级。
+ *     ★ 详情是**带栈**的（snapshotDetail / closeDetail）：歌手页点进专辑，再点「返回」
+ *     会回到歌手页，而不是一路退回搜索结果。
+ *     ★ 点曲目行播放按容器的 data-list 分派（listOf / playTrackAt）：搜索结果就播
+ *     搜索结果、详情页就播详情页。以前不管行属于哪一份都播 detail.tracks，于是
+ *     「搜索页点歌，播出来的是上一次打开的那个歌单」。
  *
  *     歌词：/api/song/lyric/v1（拿不到退 /api/song/lyric）一次取回 lrc（时间轴）+
  *     tlyric（翻译）+ romalrc（罗马音）+ yrc（逐字时间轴），合成「主行 + 它的翻译 +
@@ -168,13 +177,32 @@
  *       · 评论点赞：点赞 POST /api/v1/comment/like，取消 POST /api/v1/comment/unlike
  *         （请求体只有 threadId=R_SO_4_<歌曲>、commentId、csrf_token；type 是资源类型
  *         0=歌曲，不是点赞开关）。取消点赞原先发到了 /comment/like 上，是错的。
- *       · 收藏：直接打 /api/radio/like（alg=itembased + trackId + like + time=3 +
- *         csrf_token，like 只有字符串 'false' 才算取消）→ 不成再退回复用站点自己的
- *         window.subscribe（播放条那个 ♡ 就是它）→ 最后用「我喜欢的音乐」的真实状态
- *         校验，成功才说成功，失败把 code / message 一并说出来。之所以不能只调
- *         subscribe：它在内容 iframe 没起来时会静默什么都不做。
+ *       · 收藏：**多条官方口径依次试，每条都拿真实状态校验**（见 doLike）。为什么
+ *         不能只打一条：站点那条 POST /api/radio/like 在**不带客户端姿态**时会被风控
+ *         直接回 -460（而姿态默认关着），于是原来「先打它、再退 window.subscribe」的
+ *         顺序实际等于「点了没反应」—— radio/like 必挂，而 window.subscribe 只要
+ *         **存在**就被当成成功（它在内容 iframe 没起来时什么都不做也不报错），
+ *         原生那颗 ♡ 从没被真的点到过。现在按这个顺序试：
+ *           ① 姿态开着时：/api/radio/like（那条路带姿态才通）
+ *           ② /api/v1/radio/like —— 同一个写接口的 v1 路由，实测不带姿态回 301
+ *              （不是 -460：风控只挂在老路由上），默认设置下最靠谱的一条
+ *           ③ /api/v1/playlist/manipulate/tracks —— 网页版「添加到歌单」那条官方
+ *              接口，「我喜欢的音乐」本身就是 specialType 5 歌单，op=add/del + pid
+ *           ④ window.subscribe →（它静默无效时）播放条那颗原生 ♡
+ *           ⑤ 姿态关着时最后补一次 /api/radio/like（万一这个网络没被风控）
+ *         ④ 的两个入口都是**开关**，只在「当前状态确实与目标相反」时才动，而且每条
+ *         之间都重读状态，免得前一条成了又被后一条切回去。状态读不回来时不点开关、
+ *         不瞎猜；只有状态真的变了才说成功（服务端明确回 200 但状态核不上时会标注）。
  *       · 两者都写诊断（window.__nm3LikeLog）。未登录回 301、风控回 -460/-462、
  *         接口变了回 404 —— 这些原因现在都会如实显示，不再是笼统一句「失败」。
+ *
+ *     封面：所有图都走 imgHtml()（= pic() + 一份 data-nm3raw 兜底）。pic() 除了把
+ *     http:// 升成 https://，还要处理约 13% 歌单那种「合成封面」URL（自带 imageView
+ *     ops 链、底图是模糊占位、真封面当 watermark 合上去）：直接拼 &param= 会被 CDN
+ *     忽略 → 列表里每次都去下 800×800 的大图（实测单张 0.5~1.1 MB），慢到看上去就是
+ *     「这些歌单没有封面」；正确做法是把尺寸追加到 ops 链**末尾**（实测 1.1 MB →
+ *     180 KB，图还是那张对的），而整串 query 绝不能丢。加载失败时 onCoverError 先退回
+ *     站点原图、再换占位图，任何列表都不会留破图或空白。
  *
  *     ★★ 下载与「客户端姿态取流」都是**默认关闭**的敏感功能（见脚本顶部免责
  *     声明 + CONFIG 里的 ALLOW_DOWNLOAD / ALLOW_CLIENT_SPOOF）。下面两段描述的是
@@ -221,6 +249,8 @@
     COMMENT_LIMIT: 20,         // 评论每页多少条
     MAX_PLAYLIST_TRACKS: 1000, // 单个歌单最多读多少首
     SONG_DETAIL_BATCH: 500,    // /api/song/detail 单次批量上限
+    ARTIST_PAGE: 50,           // 歌手「全部歌曲」每页多少首（点「加载更多」翻页）
+    ARTIST_ALBUM_PAGE: 30,     // 歌手「专辑」每页多少张
     TICK: 300,                 // 轮询间隔（毫秒）
 
     /* ────────────────────────────────────────────────────────────────
@@ -386,14 +416,75 @@
 
   /**
    * 图片地址 + 网易图床缩放参数。
+   *
    * ★ 必须把 http 升成 https：站点是 https 页面，而 /api/v6/playlist/detail
    *   返回的 al.picUrl 是 http:// 开头的，浏览器会按混合内容拦掉（或等自动升级
    *   而实际不生效），实测表现就是封面一片空白。p1.music.126.net 的 https 是通的。
+   *
+   * ★★ 约 13% 的歌单封面自带一长串 imageView ops（实测：720 个歌单里 92 个），
+   *   长这样（为方便阅读换行）：
+   *
+   *     …jpg?imageView=1&thumbnail=800y800&enlarge=1%7CimageView=1
+   *          &watermark&type=1&image=<base64>&dx=0&dy=0%7CimageView=1
+   *
+   *   这是站点给「自定义封面」做的**服务端合成**：底图其实是一张模糊占位，真正的
+   *   封面作为 watermark 图层合上去（实测把整串 query 丢掉只会剩一张模糊底图，
+   *   所以绝不能丢）。可直接拼 `&param=WxH` 又会被 CDN 忽略 —— 于是列表里每次都
+   *   去下 800×800 的合成大图，实测单张 0.5~1.1 MB（40 张卡片就是几十 MB），慢到
+   *   看上去就是「这些歌单没有封面」。
+   *
+   *   这种 URL 的 ops 是用 %7C 串起来的、末尾那一段是个空操作，把 thumbnail
+   *   追加到**末尾**才真的生效（实测 1.1 MB → 180 KB，而且图还是那张对的水印封面；
+   *   去改前面那个 thumbnail=800y800 反而会把合成弄丢）。
    */
   function pic(url, size) {
     if (!url) return '';
     const u = String(url).replace(/^http:\/\//i, 'https://');
-    return u + (u.indexOf('?') >= 0 ? '&' : '?') + 'param=' + size + 'y' + size;
+    const px = size + 'y' + size;
+
+    if (/[?&]imageView=/.test(u)) {
+      // 合成封面：尺寸必须追加在 ops 链末尾
+      return /%7CimageView=1$/.test(u) ? u + '&thumbnail=' + px : u + '%7CimageView=1&thumbnail=' + px;
+    }
+    const par = /([?&])param=[^&]*/;
+    if (par.test(u)) return u.replace(par, '$1param=' + px);        // 已有就改写，别拼第二份
+    const th = /([?&])thumbnail=[^&]*/;
+    if (th.test(u)) return u.replace(th, '$1thumbnail=' + px);
+    return u + (u.indexOf('?') >= 0 ? '&' : '?') + 'param=' + px;
+  }
+
+  /** 只做 http→https（兜底用的原图地址：带缩放参数那条挂了就退回站点自己给的这张） */
+  function rawPic(url) {
+    return url ? String(url).replace(/^http:\/\//i, 'https://') : '';
+  }
+
+  /** 封面彻底加载不出来时的占位图（深色底 + 音符，不再是破图或空白） */
+  const DEAD_COVER = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">' +
+    '<rect width="100" height="100" fill="#1E2133"/>' +
+    '<text x="50" y="66" font-size="36" text-anchor="middle" fill="#4B5670">\u266a</text></svg>');
+
+  /**
+   * 统一的封面 <img>。
+   * ★ data-nm3raw 留一份「站点原图」：万一带缩放参数那条加载失败（CDN 抖动、
+   *   合成接口抽风），先退回原图，再不行才换成占位图 —— 见 onCoverError。
+   *   这样任何列表里都不会出现整块空白或破图。
+   */
+  function imgHtml(url, size, extra) {
+    const src = pic(url, size);
+    if (!src) return '';
+    return '<img src="' + esc(src) + '" data-nm3raw="' + esc(rawPic(url)) + '" alt=""' +
+      (extra ? ' ' + extra : '') + ' loading="lazy">';
+  }
+
+  function onCoverError(e) {
+    const img = e && e.target;
+    if (!img || !img.tagName || img.tagName !== 'IMG' || !img.getAttribute) return;
+    const raw = img.getAttribute('data-nm3raw');
+    if (!raw) return;
+    if (img.getAttribute('src') !== raw) { img.setAttribute('src', raw); return; }  // 先退回站点原图
+    img.removeAttribute('data-nm3raw');
+    img.setAttribute('src', DEAD_COVER);                                            // 再不行换占位图
   }
 
   /**
@@ -850,6 +941,11 @@
     .nm3-seg a.nm3-on { background: var(--nm3-deep); color: var(--nm3-fg); font-weight: 500; }
     .nm3-seg a em { font-style: normal; font-size: 11.5px; color: var(--nm3-fg3); }
     .nm3-seg a.nm3-on em { color: rgba(218,226,237,.7); }
+    /* 歌手详情的「全部歌曲 / 专辑」分段（挂在详情头下面一行） */
+    .nm3-dh-tabs { padding: 14px 34px 2px; }
+    /* 「加载更多」（歌手全部歌曲 / 专辑分页） */
+    .nm3-more-wrap { display: flex; justify-content: center; padding: 20px 0 34px; }
+    .nm3-more-wrap .nm3-btn { min-width: 160px; }
 
     /* ── 状态块 ────────────────────────────────────────────────── */
     .nm3-state {
@@ -1415,7 +1511,7 @@
       #nm3-view-listen .nm3-cover { width: 184px; height: 184px; }
       #nm3-view-listen .nm3-title { font-size: 20px; margin-top: 16px; }
       #nm3-view-listen .nm3-pane-wrap { height: 40vh; }
-      .nm3-dh, .nm3-sec, .nm3-sh { padding-left: 20px; padding-right: 20px; }
+      .nm3-dh, .nm3-dh-tabs, .nm3-sec, .nm3-sh { padding-left: 20px; padding-right: 20px; }
       .nm3-hero { margin-left: 20px; margin-right: 20px; padding: 20px; gap: 18px; }
       .nm3-hero-cover { width: 84px; height: 84px; }
       .nm3-tracks { padding-left: 12px; padding-right: 12px; }
@@ -1521,7 +1617,14 @@
     title: '', cover: '', sub: '',
     brief: '',          // 歌手简介（只有 artist 有）
     briefOpen: false,
-    tracks: [], busy: false, error: null
+    tracks: [], busy: false, error: null,
+    // 歌手详情：全部歌曲 / 专辑（见 loadDetail('artist') / setArtistTab）
+    artistTab: 'songs', // 'songs' | 'albums'
+    tracksMore: false,  // 全部歌曲还有下一页
+    tracksTotal: 0,
+    albums: [],
+    albumsMore: false,
+    listBusy: false     // 「加载更多 / 切页签」正在拉数据
   };
 
   /* ═══════════════════════════ 小工具 ═══════════════════════════ */
@@ -1559,14 +1662,13 @@
   function trackRow(i, song, o) {
     const opt = o || {};
     const cur = !!opt.current;
-    const cover = pic(albumOf(song).picUrl, 80);
     let tag = '';
     if (opt.tag === 'new') tag = '<div><span class="nm3-tag nm3-new">新歌</span></div>';
     else if (opt.tag === 'old') tag = '<div><span class="nm3-tag nm3-old">红心</span></div>';
     return (
       '<div class="nm3-track' + (cur ? ' nm3-current' : '') + '" data-i="' + i + '">' +
         '<div class="nm3-t-cover">' +
-          (cover ? '<img src="' + esc(cover) + '" alt="" loading="lazy">' : '') +
+          imgHtml(albumOf(song).picUrl, 80) +
           '<span class="nm3-t-badge">♪</span>' +
         '</div>' +
         '<div class="nm3-t-idx">' + (cur ? '♪' : i + 1) + '</div>' +
@@ -1579,8 +1681,22 @@
     );
   }
 
+  /**
+   * 曲目列表。
+   *
+   * ★ `data-list` 是**点行播放**的归属标记，不是装饰：同一套行样式被「搜索结果」
+   *   和「详情页」共用，而它们各自对应不同的数组（搜索结果是 searchData.songs，
+   *   详情页是 detail.tracks）。原先不管行属于哪一份、点下去一律播 detail.tracks，
+   *   于是「搜索页点歌 → 播出来的是上一次打开的那个歌单里的歌」（detail.tracks
+   *   还留着上次的），这就是那个 bug。现在键写在容器上（见 listOf / playTrackAt），
+   *   渲染时也把数组登记进 TRACK_LISTS，两边都不会再串。
+   */
+  const TRACK_LISTS = {};
+
   function trackListHtml(list, opts) {
     const o = opts || {};
+    const key = o.list || 'detail';
+    TRACK_LISTS[key] = list || [];
     const np = nowPlaying();
     const playingId = np && np.track ? String(np.track.id) : '';
     const rows = list
@@ -1592,7 +1708,25 @@
       )
       .join('');
     return '<div class="nm3-tracks' + (o.tagged ? ' nm3-tagged' : '') +
-      '" data-list="' + esc(o.list || 'detail') + '">' + rows + '</div>';
+      '" data-list="' + esc(key) + '">' + rows + '</div>';
+  }
+
+  /** 某个列表键当前对应的数组（搜索结果是实时读 searchData，别缓存错） */
+  function listOf(key) {
+    if (key === 'search') return (searchData && searchData.songs) || [];
+    if (key === 'detail') return detail.tracks || [];
+    return TRACK_LISTS[key] || [];
+  }
+
+  /** 点某一行 → 播放**那一行所属的**列表里的第 i 首 */
+  function playTrackAt(key, i) {
+    const list = listOf(key);
+    const song = list[i];
+    if (!song) return false;
+    if (!playList(list, i)) return false;
+    toast('正在播放：' + (song.name || ''));
+    refreshCurrentSoon();
+    return true;
   }
 
   /** 与 trackListHtml 对称：只改“正在播放”那一行 */
@@ -1713,11 +1847,11 @@
       return;
     }
     const info = userInfo || {};
-    const avatar = info.avatarUrl ? pic(info.avatarUrl, 60) : '';
+    const avatar = imgHtml(info.avatarUrl, 60);
     const name = info.nickname || '我';
     box.innerHTML =
       '<div class="nm3-user-chip">' +
-        (avatar ? '<img src="' + esc(avatar) + '" alt="">' : '<img alt="">') +
+        (avatar || '<img alt="">') +
         '<span>' + esc(name) + '</span>' +
       '</div>' +
       '<div class="nm3-user-menu"><a data-act="logout">退出登录</a></div>';
@@ -1734,6 +1868,7 @@
     uid = null;
     likedSet = null;
     likedFor = null;
+    likedPlId = null;
     mineLoaded = false;
     mineLiked = null;
     mineMade = [];
@@ -1775,6 +1910,8 @@
       '</div>';
 
     panelEl.addEventListener('click', onPanelClick);
+    // 封面兜底：<img> 的 error 不冒泡，但能在捕获阶段接到（见 onCoverError）
+    document.addEventListener('error', onCoverError, true);
 
     // 进度条 / 音量条拖拽：按下在面板里，移动 / 松开挂 document（拖出面板也要跟手）。
     // 带 __nm3Forwarded 的是脚本转发给原生控件的合成事件，不能再被这里吃一遍。
@@ -1839,6 +1976,9 @@
     // Shift / Alt + 点击 = 重新挑一次音乐文件夹（详见 ensureDownloadDir）
     'dl-current': (el, ev) => downloadCurrent(null, { pickDir: !!(ev && (ev.shiftKey || ev.altKey)) }),
     'bio-toggle': () => { detail.briefOpen = !detail.briefOpen; renderCurrent(); },
+    // 歌手详情：切「全部歌曲 / 专辑」页签、翻页（见 setArtistTab / loadArtistMore）
+    'artist-tab': (el) => { setArtistTab(el.getAttribute('data-tab')); },
+    'artist-more': () => { loadArtistMore(); },
     'ctl-mode': () => {
       if (!forwardCtl('mode')) return;
       // 站点切换模式后按钮的 title 才会变，等它写完再刷新显示
@@ -1882,7 +2022,11 @@
     if (row) {
       const i = parseInt(row.getAttribute('data-i'), 10);
       if (!isFinite(i)) return;
-      playDetailAt(i);
+      // ★ 按行所在容器的 data-list 取列表：搜索结果就播搜索结果，
+      //   详情页就播详情页 —— 不能再一律往 detail.tracks 上播（那会播到上次的歌单）
+      const wrap = row.closest('.nm3-tracks');
+      const key = (wrap && wrap.getAttribute('data-list')) || 'detail';
+      playTrackAt(key, i);
       return;
     }
     const card = e.target.closest('[data-card]');
@@ -2473,40 +2617,108 @@
   /**
    * 收藏 / 取消收藏当前这首歌。
    *
-   * ★ 不能只调一下 window.subscribe 就当成功：站点那个 subscribe 在「内容 iframe
-   *   还没起来 / 顶层 window.GUser 还没写进来」的时候会**静默什么都不做**
-   *   （core.js 里 `if (bJ6O.nm && bJ6O.nm.x)` 没有 else 分支），脚本却当成收藏
-   *   成功 —— 表现就是「点了收藏没反应」。所以这里按「先自己打接口 → 不成再退回
-   *   复用站点自己的入口 → 最后校验真实状态 → 按结果说人话」来做。
+   * ★ 为什么原来「点了没反应」：站点那条 POST /api/radio/like 在**不带客户端姿态**
+   *   时会被风控直接回 -460（作者实测；而 v4.8.0 起姿态默认关闭）。于是原来的顺序
+   *   （先打 radio/like → 不成再退 window.subscribe）实际是这样：
+   *     · radio/like 必回 -460；
+   *     · window.subscribe 只要**存在**就被当成成功返回（它在内容 iframe 没起来时
+   *       什么都不做也不报错），所以原生那颗 ♡ 从来没被真的点到过；
+   *     · 最后拿真实状态一校验当然没变，只能说「收藏没生效」。
+   *
+   * ★ 现在改成「多条官方口径依次试 + 每条都拿真实状态校验」，默认开关下也能用：
+   *     ① 客户端姿态开着时先走 /api/radio/like（那条路带姿态才通）
+   *     ② /api/v1/radio/like —— 同一个写接口的 v1 路由。实测不带任何姿态就回 301
+   *        （而不是 -460：风控只挂在老路由上），所以它才是默认设置下最靠谱的一条
+   *     ③ /api/v1/playlist/manipulate/tracks —— 网页版「添加到歌单」那条官方接口；
+   *        「我喜欢的音乐」本身就是 specialType 5 的歌单，op=add/del + pid 指它
+   *     ④ 站点自己的入口：window.subscribe →（它静默无效时）播放条那颗原生 ♡
+   *     ⑤ 姿态关着时最后再补一次 /api/radio/like（万一这个网络没被风控）
+   *   每条做完都等一会儿、重拉一次「我喜欢的音乐」核对；**只有状态真的变了才说成功**，
+   *   全都不成才把服务端给的 code 说成人话（诊断在 window.__nm3LikeLog）。
+   *
+   * ★ ④ 的两个入口都是**开关**（点一下切换），所以它们只在「当前状态确实与目标相反」
+   *   时才动；每条之间都重新读状态，避免 ② 成了又被 ④ 切回去。状态读不回来时
+   *   宁可不点，也不拿站点那颗 ♡ 去赌。
    */
   async function doLike() {
     const np = nowPlaying();
     const track = np && np.track;
     if (!track) { toast('还没有正在播放的歌曲'); return; }
     if (likeBusy) { toast('上一次收藏还没处理完'); return; }
+    if (!(await getUid())) { toast('收藏要登录网易云音乐'); return; }
 
     likeBusy = true;
     const btn = document.getElementById('nm3-ctl-like');
     if (btn) btn.classList.add('nm3-busy');
+    const songId = String(track.id);
+    const fails = [];
+    let via = '';
     try {
       await ensureLikedSet(true);
-      const cur = isLiked(track.id);
-      const want = !cur;                     // 状态拿不到时按「收藏」来
-      const res = await postRadioLike(track.id, want);
-      let via = 'api';
-      if (res.code !== 200) {
-        // 接口这条路没成（风控 / 接口变了）：退回复用站点自己的收藏入口
-        via = 'native';
-        if (!callNativeSubscribe(track)) warn('站点 subscribe 用不了，收藏多半也没成', res);
+      const before = isLiked(songId);
+      const want = before !== true;          // 状态拿不到（null）时按「收藏」来
+      let known = before;
+
+      /** 等它落库，再重拉一次真实状态；读到了就更新 known */
+      const verify = async (waitMs) => {
+        if (waitMs) await new Promise((r) => setTimeout(r, waitMs));
+        await ensureLikedSet(true);
+        const v = isLiked(songId);
+        if (v !== null) known = v;
+        return v;
+      };
+
+      /** 跑一条口径 → 校验；返回 true 表示状态真的变成目标了 */
+      const attempt = async (name, run) => {
+        let res;
+        try { res = await run(); } catch (e) { res = { code: 0, msg: (e && e.message) || '异常' }; }
+        const code = (res && res.code != null) ? Number(res.code) : 0;
+        const now = await verify(code === 301 ? 0 : 900);
+        if (now === want) { via = name; return true; }
+        // 状态读不回来时（账号接口被限制之类）：服务端明确回 200 就认它，但如实标注
+        if (now === null && code === 200) { via = name + '（服务端 200，状态没核上）'; return true; }
+        fails.push(name + ' → code=' + code + ((res && res.msg) ? ' ' + res.msg : ''));
+        return false;
+      };
+
+      /* ④ 站点自己的两个入口（开关型：只在当前状态与目标相反时才动） */
+      const siteSubscribe = () => {
+        if (known === want) return { code: 200, msg: '已是目标状态，跳过' };
+        if (known === null) return { code: 0, msg: '读不到当前收藏状态，站点入口是开关，不敢盲点' };
+        try {
+          const w = window.top;
+          if (w && typeof w.subscribe === 'function') {
+            w.subscribe(track, !!track.program);
+            return { code: 200, msg: 'window.subscribe' };
+          }
+        } catch (e) { warn('调用站点 subscribe 失败', e); }
+        return { code: 0, msg: '站点 subscribe 不可用' };
+      };
+      const siteLikeButton = () => {
+        if (known === want) return { code: 200, msg: '已是目标状态，跳过' };
+        if (known === null) return { code: 0, msg: '读不到当前收藏状态，不敢盲点原生 ♡' };
+        return forwardCtl('like') ? { code: 200, msg: '原生 ♡' } : { code: 0, msg: '没找到原生 ♡' };
+      };
+
+      const strats = [];
+      if (clientSpoofOn()) strats.push(['radio-like（带客户端姿态）', () => postRadioLike(songId, want)]);
+      strats.push(['radio-like-v1', () => postRadioLikeV1(songId, want)]);
+      strats.push(['playlist-manipulate', () => postPlaylistLike(songId, want)]);
+      strats.push(['site-subscribe', siteSubscribe]);
+      strats.push(['site-like-button', siteLikeButton]);
+      if (!clientSpoofOn()) strats.push(['radio-like', () => postRadioLike(songId, want)]);
+
+      for (const item of strats) {
+        if (await attempt(item[0], item[1])) break;
       }
-      await new Promise((r) => setTimeout(r, 900));
-      await ensureLikedSet(true);
-      const now = isLiked(track.id);
-      if (now === want) {
+
+      if (via) {
+        log('收藏：', want ? '收藏' : '取消收藏', '成功（' + via + '）');
         toast(want ? '已收藏到「我喜欢的音乐」' : '已取消收藏', 2000);
       } else {
-        warn('收藏没生效', { via: via, want: want, now: now, res: res });
-        toast(likeFailText(res) + '（收藏没生效，F12 里有 window.__nm3LikeLog）', 4400);
+        warn('收藏没生效', { songId: songId, want: want, fails: fails });
+        toast(likeFailText(likeFailFrom(fails)) +
+          '（几条官方口径都试过了，F12 的 window.__nm3LikeLog 有全过程）', 4600);
       }
     } finally {
       likeBusy = false;
@@ -2514,6 +2726,84 @@
       updateControlsUi();
     }
   }
+
+  /** 从各条口径的失败记录里挑一个最有信息量的 code 来说人话（200 不算失败原因） */
+  function likeFailFrom(fails) {
+    const codes = (fails || []).map((s) => {
+      const m = /code=(-?\d+)/.exec(s);
+      return m ? Number(m[1]) : 0;
+    }).filter((c) => c !== 200);
+    const specific = codes.find((c) => c && c !== -460 && c !== -462);
+    if (specific != null) return { code: specific, msg: '' };
+    const risk = codes.find((c) => c === -460 || c === -462);
+    if (risk != null) return { code: risk, msg: '' };
+    return { code: codes.length ? codes[0] : 0, msg: '' };
+  }
+
+  /** 「我喜欢的音乐」的歌单 id（/api/v1/playlist/manipulate/tracks 要用它当 pid） */
+  let likedPlId = null;
+  async function likedPlaylistId() {
+    if (likedPlId) return likedPlId;
+    try {
+      const id = await getUid();
+      if (!id) return null;
+      const d = await apiGet('/api/user/playlist', { uid: id, limit: 1000, offset: 0 });
+      const liked = ((d && d.playlist) || []).find((p) => p && p.specialType === 5);
+      if (liked && liked.id) likedPlId = liked.id;
+    } catch (e) { /* noop */ }
+    return likedPlId;
+  }
+
+  /** 把客户端姿态参数补进表单（只在开关打开时） */
+  function signForm(params) {
+    if (clientSpoofOn()) {
+      Object.keys(CLIENT_SIGN).forEach((k) => { if (!params.has(k)) params.set(k, CLIENT_SIGN[k]); });
+    }
+    return params;
+  }
+
+  /**
+   * POST /api/v1/radio/like —— 与 /api/radio/like 同一个写接口，只是 v1 路由。
+   * ★ 实测（未登录探测）：老路由不带客户端姿态直接回 -460（风控），而这条 v1 路由
+   *   回的是正常的 301（未登录）—— 说明风控只挂在老路由上。所以默认开关（姿态关着）
+   *   时它是收藏最靠谱的一条。
+   */
+  async function postRadioLikeV1(songId, like) {
+    const params = signForm(new URLSearchParams({
+      alg: 'itembased',
+      trackId: String(songId),
+      like: like ? 'true' : 'false',
+      time: '3',
+      csrf_token: csrfToken()
+    }));
+    const res = await sendForm('/api/v1/radio/like', params);
+    likeDiag('radio-like-v1', { songId: songId, like: !!like, code: res.code, msg: res.msg });
+    return res;
+  }
+
+  /**
+   * POST /api/v1/playlist/manipulate/tracks —— 网页版「添加到歌单」那条官方接口。
+   * 「我喜欢的音乐」本身就是一个 specialType 5 的歌单，所以 op=add/del + pid 指它，
+   * 效果就是收藏 / 取消收藏。参数照抄站点：pid、trackIds（JSON 数组字符串）、imme。
+   * 实测不带客户端姿态也是回 301（未登录），不是 -460。
+   */
+  async function postPlaylistLike(songId, like) {
+    const pid = await likedPlaylistId();
+    if (!pid) return { code: 0, msg: '没找到「我喜欢的音乐」歌单' };
+    const params = signForm(new URLSearchParams({
+      op: like ? 'add' : 'del',
+      pid: String(pid),
+      trackIds: JSON.stringify([Number(songId)]),
+      imme: 'true',
+      csrf_token: csrfToken()
+    }));
+    const res = await sendForm('/api/v1/playlist/manipulate/tracks', params);
+    likeDiag('playlist-manipulate', {
+      songId: songId, pid: pid, op: like ? 'add' : 'del', code: res.code, msg: res.msg
+    });
+    return res;
+  }
+
 
   /**
    * 直接打站点网页版自己的收藏接口 /api/radio/like。
@@ -2523,31 +2813,16 @@
    * 带上就回到正常的 301（未登录）/ 200 —— markClientCookie 已经在会话里补好了。
    */
   async function postRadioLike(songId, like) {
-    const params = new URLSearchParams({
+    const params = signForm(new URLSearchParams({
       alg: 'itembased',
       trackId: String(songId),
       like: like ? 'true' : 'false',
       time: '3',
       csrf_token: csrfToken()
-    });
-    if (clientSpoofOn()) {
-      Object.keys(CLIENT_SIGN).forEach((k) => { if (!params.has(k)) params.set(k, CLIENT_SIGN[k]); });
-    }
+    }));
     const res = await sendForm('/api/radio/like', params);
     likeDiag('radio-like', { songId: songId, like: !!like, code: res.code, msg: res.msg });
     return res;
-  }
-
-  /** 站点自己的收藏入口：顶层 window.subscribe（播放条那个 ♡ 就是它），失败再退原生按钮 */
-  function callNativeSubscribe(track) {
-    try {
-      const w = window.top;
-      if (w && typeof w.subscribe === 'function') {
-        w.subscribe(track, !!track.program);
-        return true;
-      }
-    } catch (e) { warn('调用站点 subscribe 失败', e); }
-    return forwardCtl('like');
   }
 
   /* ── 评论点赞 ──
@@ -3687,7 +3962,8 @@
     const t = np.track;
     const info = trackInfo(t);
     const playing = !!np.playing;
-    const coverUrl = pic(currentCoverUrl(t, info), 500);
+    const coverRaw = currentCoverUrl(t, info);
+    const coverUrl = pic(coverRaw, 500);
 
     const bg = document.getElementById('nm3-np-bg');
     if (bg) bg.style.backgroundImage = coverUrl ? 'url(' + JSON.stringify(coverUrl) + ')' : 'none';
@@ -3718,7 +3994,7 @@
       '<div class="nm3-np">' +
         '<div class="nm3-np-left">' +
           '<div class="nm3-cover">' +
-            (coverUrl ? '<img src="' + esc(coverUrl) + '" alt="">' : '') +
+            imgHtml(coverRaw, 500) +
           '</div>' +
           '<div class="nm3-title">' + esc(info.name) + '</div>' +
           // 歌手名 / 专辑名都可点：分别进歌手详情、专辑详情（都借「搜索」视图展示）
@@ -4166,15 +4442,13 @@
 
   function commentItem(c, i) {
     const u = c.user || {};
-    const avatar = u.avatarUrl ? pic(u.avatarUrl, 80) : '';
+    const avatar = imgHtml(u.avatarUrl, 80, 'class="nm3-cm-avatar"');
     const reply = (c.beReplied && c.beReplied[0]) || null;
     const n = Number(c.likedCount) || 0;
     const liked = !!c.liked;
     return (
       '<div class="nm3-cm-item" data-ci="' + esc(i) + '">' +
-        (avatar
-          ? '<img class="nm3-cm-avatar" src="' + esc(avatar) + '" alt="" loading="lazy">'
-          : '<div class="nm3-cm-avatar"></div>') +
+        (avatar || '<div class="nm3-cm-avatar"></div>') +
         '<div class="nm3-cm-body">' +
           '<div class="nm3-cm-meta">' +
             '<b>' + esc(u.nickname || '匿名用户') + '</b>' +
@@ -4306,12 +4580,11 @@
   }
 
   function playlistCard(p) {
-    const cover = pic(p.coverImgUrl, 300);
     const sub = p.creator && p.creator.nickname ? p.creator.nickname : '';
     return (
       '<div class="nm3-card" data-card="' + esc(p.id) + '" data-kind="playlist">' +
         '<div class="nm3-card-cover">' +
-          (cover ? '<img src="' + esc(cover) + '" alt="" loading="lazy">' : '') +
+          imgHtml(p.coverImgUrl, 300) +
           '<span class="nm3-card-play" data-act="openplay" data-kind="playlist" data-id="' +
             esc(p.id) + '" title="播放">' + SVG.play(15, INK) + '</span>' +
         '</div>' +
@@ -4329,11 +4602,10 @@
 
     let html = '';
     if (mineLiked) {
-      const cover = pic(mineLiked.coverImgUrl, 300);
       html +=
         '<div class="nm3-hero">' +
           '<div class="nm3-hero-cover">' +
-            (cover ? '<img src="' + esc(cover) + '" alt="">' : '') +
+            imgHtml(mineLiked.coverImgUrl, 300) +
           '</div>' +
           '<div class="nm3-hero-info">' +
             '<div class="nm3-hero-label">' + SVG.heart(19, 'currentColor') + '我喜欢的音乐</div>' +
@@ -4449,7 +4721,7 @@
       searchDone = false;
       searchData = {};
       searchError = null;
-      detail.active = false;
+      deactivateDetail();
       searchSeq++;
       switchTab('search');
       renderSearch();
@@ -4468,7 +4740,7 @@
     searchError = null;
     searchDone = true;
     searchData = {};
-    detail.active = false;
+    deactivateDetail();
 
     const input = document.getElementById('nm3-input');
     if (input && input.value !== q) input.value = q;
@@ -4540,17 +4812,18 @@
     }
 
     if (type.key === 'songs') {
-      host.innerHTML = seg + trackListHtml(list, { list: 'detail' });
+      // ★ 搜索结果的单曲列表：data-list 必须标成 'search'，点行才播搜索结果
+      //   （标成 detail 就会去播上次打开的歌单，见 trackListHtml 的说明）
+      host.innerHTML = seg + trackListHtml(list, { list: 'search' });
       return;
     }
 
     const cards = list.map((x) => {
       if (type.key === 'artists') {
-        const cover = pic(x.picUrl, 300);
         const alias = (x.alias && x.alias[0]) || '';
         return '<div class="nm3-card" data-card="' + esc(x.id) + '" data-kind="artist">' +
           '<div class="nm3-card-cover nm3-round">' +
-            (cover ? '<img src="' + esc(cover) + '" alt="" loading="lazy">' : '') +
+            imgHtml(x.picUrl, 300) +
             '<span class="nm3-card-play" data-act="openplay" data-kind="artist" data-id="' +
               esc(x.id) + '" title="播放热门">' + SVG.play(15, INK) + '</span>' +
           '</div>' +
@@ -4558,24 +4831,12 @@
           '<div class="nm3-card-count">' + (alias ? esc(alias) + ' · ' : '') +
             fmtCount(x.albumSize || 0) + ' 张专辑</div></div>';
       }
-      if (type.key === 'albums') {
-        const cover = pic(x.picUrl, 300);
-        const ar = (x.artist && x.artist.name) || '';
-        return '<div class="nm3-card" data-card="' + esc(x.id) + '" data-kind="album">' +
-          '<div class="nm3-card-cover">' +
-            (cover ? '<img src="' + esc(cover) + '" alt="" loading="lazy">' : '') +
-            '<span class="nm3-card-play" data-act="openplay" data-kind="album" data-id="' +
-              esc(x.id) + '" title="播放">' + SVG.play(15, INK) + '</span>' +
-          '</div>' +
-          '<div class="nm3-card-name" title="' + esc(x.name) + '">' + esc(x.name) + '</div>' +
-          '<div class="nm3-card-count">' + (ar ? esc(ar) + ' · ' : '') +
-            fmtCount(x.size || 0) + ' 首</div></div>';
-      }
-      const cover = pic(x.coverImgUrl, 300);
+      // 专辑卡片与歌手详情的「专辑」页共用同一个构造函数
+      if (type.key === 'albums') return albumCard(x);
       const cr = (x.creator && x.creator.nickname) || '';
       return '<div class="nm3-card" data-card="' + esc(x.id) + '" data-kind="playlist">' +
         '<div class="nm3-card-cover">' +
-          (cover ? '<img src="' + esc(cover) + '" alt="" loading="lazy">' : '') +
+          imgHtml(x.coverImgUrl, 300) +
           '<span class="nm3-card-play" data-act="openplay" data-kind="playlist" data-id="' +
             esc(x.id) + '" title="播放">' + SVG.play(15, INK) + '</span>' +
         '</div>' +
@@ -4585,6 +4846,24 @@
     }).join('');
 
     host.innerHTML = seg + '<section class="nm3-sec"><div class="nm3-grid">' + cards + '</div></section>';
+  }
+
+  /**
+   * 专辑卡片。搜索结果 / 歌手详情的「专辑」页共用。
+   * 字段兼容两套：cloudsearch 的 `artist`，以及 /api/artist/albums 的 `artist`/`artists`。
+   */
+  function albumCard(a) {
+    const ar = (a.artist && a.artist.name) ||
+      (a.artists && a.artists[0] && a.artists[0].name) || '';
+    const count = a.size ? fmtCount(a.size) + ' 首' : '';
+    return '<div class="nm3-card" data-card="' + esc(a.id) + '" data-kind="album">' +
+      '<div class="nm3-card-cover">' +
+        imgHtml(a.picUrl, 300) +
+        '<span class="nm3-card-play" data-act="openplay" data-kind="album" data-id="' +
+          esc(a.id) + '" title="播放">' + SVG.play(15, INK) + '</span>' +
+      '</div>' +
+      '<div class="nm3-card-name" title="' + esc(a.name) + '">' + esc(a.name) + '</div>' +
+      '<div class="nm3-card-count">' + [ar ? esc(ar) : '', count].filter(Boolean).join(' · ') + '</div></div>';
   }
 
   /* ═══════════════════════════ 共用详情 ═══════════════════════════ */
@@ -4676,6 +4955,15 @@
       // ★ 原来这里只取「热门歌曲」，所以从听歌页点歌手进来时标题是空的、也没有
       //   头像。名字 / 封面 / 简介在 /api/v1/artist/<id>（实测可用，返回 artist
       //   对象），曲目仍在 /api/artist/top/song。
+      // ★ 原来这里只有 /api/artist/top/song —— 就是站点那个「热门 50 首」，
+      //   所以歌手页永远只看到 50 首、也看不到专辑。现在三件事分开取：
+      //     · /api/v1/artist/<id>        —— 名字 / 头像 / 简介
+      //     · /api/v1/artist/songs       —— **全部歌曲**，带 more/total，可翻页
+      //       （实测 order=time|hot 都行，limit/offset 有效，周杰伦 total=566）
+      //     · /api/artist/albums/<id>    —— 专辑列表，带 more，可翻页
+      //       （注意：/api/v1/artist/albums 是 404，别用 v1）
+      //   专辑列表不在这里取：歌手页默认停在「全部歌曲」，切到「专辑」页签时再拉
+      //   （见 setArtistTab），免得为了看歌单多打一次接口。
       let info = null;
       try {
         const d = await apiGet('/api/v1/artist/' + id);
@@ -4683,18 +4971,61 @@
       } catch (e) {
         warn('歌手信息读取失败', e);
       }
-      const d2 = await apiGet('/api/artist/top/song', { id: id });
-      const songs = ((d2 && d2.songs) || []).filter(Boolean);
+
+      let songs = [];
+      let more = false;
+      let total = 0;
+      try {
+        const d2 = await apiGet('/api/v1/artist/songs', {
+          id: id, order: 'time', limit: CONFIG.ARTIST_PAGE, offset: 0
+        });
+        songs = ((d2 && d2.songs) || []).filter(Boolean);
+        more = !!(d2 && d2.more);
+        total = (d2 && d2.total) || songs.length;
+      } catch (e) {
+        warn('歌手「全部歌曲」读取失败，退回热门 50 首', e);
+      }
+      if (!songs.length) {
+        // 兜底：老接口的热门 50 首（有些歌手/翻唱歌手只有这一份）
+        try {
+          const d3 = await apiGet('/api/artist/top/song', { id: id });
+          songs = ((d3 && d3.songs) || []).filter(Boolean);
+        } catch (e) { /* noop */ }
+        more = false;
+        total = songs.length;
+      }
       if (!info && !songs.length) throw new Error('这位歌手暂时没有可播放的歌曲。');
       return {
         title: info && info.name,
         cover: info && info.picUrl,
         sub: (info && ((info.alias && info.alias[0]) || '')) || '',
         brief: (info && (info.briefDesc || '')) || '',
-        tracks: songs
+        tracks: songs,
+        tracksMore: more,
+        tracksTotal: total
       };
     }
     throw new Error('未知的资源类型');
+  }
+
+  /**
+   * 详情栈。歌手页 → 点专辑 → 「返回」要能回到歌手页（而不是一路退回搜索结果）。
+   * 存的是详情对象的快照，返回时直接恢复，不再打接口。
+   */
+  let detailStack = [];
+
+  function snapshotDetail() {
+    if (!detail.active) return null;
+    return {
+      active: true, owner: detail.owner, kind: detail.kind, id: detail.id,
+      title: detail.title, cover: detail.cover, sub: detail.sub,
+      brief: detail.brief, briefOpen: detail.briefOpen,
+      tracks: (detail.tracks || []).slice(),
+      tracksMore: detail.tracksMore, tracksTotal: detail.tracksTotal,
+      albums: (detail.albums || []).slice(), albumsMore: detail.albumsMore,
+      artistTab: detail.artistTab,
+      busy: false, listBusy: false, error: null
+    };
   }
 
   function openItem(kind, id, autoPlay) {
@@ -4702,11 +5033,21 @@
     const owner = tab === 'search' ? 'search' : 'mine';
     const meta = lookupItem(kind, id);
 
+    // 同一个东西重复点开（比如在歌手页点两下同一张专辑）就别往栈里塞
+    const same = detail.active && String(detail.id) === String(id) && detail.kind === kind;
+    if (!same) {
+      const snap = snapshotDetail();
+      if (snap) detailStack.push(snap);
+    }
+
     detail = {
       active: true, owner: owner, kind: kind, id: id,
       title: meta.title || '', cover: meta.cover || '', sub: meta.sub || '',
       brief: '', briefOpen: false,
-      tracks: [], busy: true, error: null
+      tracks: [], tracksMore: false, tracksTotal: 0,
+      albums: [], albumsMore: false,
+      artistTab: 'songs', listBusy: false,
+      busy: true, error: null
     };
     renderCurrent();
 
@@ -4720,6 +5061,8 @@
         if (r.sub) detail.sub = r.sub;
         if (r.brief) detail.brief = r.brief;
         detail.tracks = r.tracks || [];
+        detail.tracksMore = !!r.tracksMore;
+        detail.tracksTotal = r.tracksTotal || detail.tracks.length;
       })
       .catch((e) => {
         warn('详情读取失败', e);
@@ -4733,11 +5076,102 @@
       });
   }
 
-  function closeDetail() {
+  /**
+   * 彻底关掉详情（换了搜索关键词、退出到别的列表时用）。
+   * ★ 必须连曲目一起清掉，并把详情栈一起丢掉 —— 留着 detail.tracks 正是
+   *   「搜索页点歌播成上次那个歌单」那个 bug 的燃料（见 listOf / trackListHtml）。
+   */
+  function deactivateDetail() {
     detail.active = false;
     detail.tracks = [];
+    detail.tracksMore = false;
+    detail.tracksTotal = 0;
+    detail.albums = [];
+    detail.albumsMore = false;
     detail.error = null;
+    detail.listBusy = false;
+    detailStack = [];
+  }
+
+  /** 「返回」：先回上一页详情（歌手 → 专辑 这种情况），没有上一页才退出详情 */
+  function closeDetail() {
+    const prev = detailStack.pop();
+    if (prev) {
+      detail = prev;
+      renderCurrent();
+      return;
+    }
+    deactivateDetail();
     renderCurrent();
+  }
+
+  /**
+   * 歌手详情：「全部歌曲 / 专辑」两个页签。
+   * 切到专辑时才第一次拉 /api/artist/albums（带 more，可继续「加载更多」）。
+   */
+  async function setArtistTab(nextTab) {
+    if (detail.kind !== 'artist') return;
+    const want = nextTab === 'albums' ? 'albums' : 'songs';
+    if (detail.artistTab === want) return;
+    detail.artistTab = want;
+    renderCurrent();
+    if (want !== 'albums' || detail.albums.length || detail.listBusy) return;
+
+    const id = detail.id;
+    const alive = () => detail.active && detail.kind === 'artist' && String(detail.id) === String(id);
+    detail.listBusy = true;
+    renderCurrent();
+    try {
+      const d = await apiGet('/api/artist/albums/' + id, {
+        limit: CONFIG.ARTIST_ALBUM_PAGE, offset: 0
+      });
+      if (!alive()) return;
+      const list = ((d && d.hotAlbums) || []).filter(Boolean);
+      detail.albums = list;
+      detail.albumsMore = !!(d && d.more) && list.length > 0;
+    } catch (e) {
+      warn('歌手专辑读取失败', e);
+      if (alive()) toast('专辑读取失败：' + ((e && e.message) || '网络异常'));
+    } finally {
+      if (alive()) { detail.listBusy = false; renderCurrent(); }
+    }
+  }
+
+  /** 歌手详情「加载更多」：全部歌曲 / 专辑共用（按当前页签决定拉哪个） */
+  async function loadArtistMore() {
+    if (detail.kind !== 'artist' || detail.busy || detail.listBusy) return;
+    const albums = detail.artistTab === 'albums';
+    if (albums ? !detail.albumsMore : !detail.tracksMore) return;
+
+    const id = detail.id;
+    const alive = () => detail.active && detail.kind === 'artist' && String(detail.id) === String(id);
+    detail.listBusy = true;
+    renderCurrent();
+    try {
+      if (albums) {
+        const d = await apiGet('/api/artist/albums/' + id, {
+          limit: CONFIG.ARTIST_ALBUM_PAGE, offset: detail.albums.length
+        });
+        if (!alive()) return;
+        const list = ((d && d.hotAlbums) || []).filter(Boolean);
+        detail.albums = detail.albums.concat(list);
+        detail.albumsMore = !!(d && d.more) && list.length > 0;
+      } else {
+        const d = await apiGet('/api/v1/artist/songs', {
+          id: id, order: 'time', limit: CONFIG.ARTIST_PAGE, offset: detail.tracks.length
+        });
+        if (!alive()) return;
+        const list = ((d && d.songs) || []).filter(Boolean);
+        detail.tracks = detail.tracks.concat(list);
+        detail.tracksMore = !!(d && d.more) && list.length > 0;
+        if (d && d.total) detail.tracksTotal = d.total;
+      }
+    } catch (e) {
+      warn('加载更多失败', e);
+      if (alive()) toast('加载失败：' + ((e && e.message) || '网络异常'));
+    } finally {
+      if (alive()) { detail.listBusy = false; renderCurrent(); }
+    }
   }
 
   function renderCurrent() {
@@ -4758,22 +5192,52 @@
     );
   }
 
+  /** 歌手详情的「全部歌曲 / 专辑」页签（挂在详情头下面） */
+  function artistTabsHtml() {
+    if (detail.kind !== 'artist') return '';
+    const tab = detail.artistTab === 'albums' ? 'albums' : 'songs';
+    const total = detail.tracksTotal || detail.tracks.length;
+    const items = [
+      ['songs', '全部歌曲', total ? fmtCount(total) : ''],
+      ['albums', '专辑', detail.albums.length ? fmtCount(detail.albums.length) : '']
+    ];
+    return '<div class="nm3-dh-tabs"><div class="nm3-seg">' +
+      items.map((it) =>
+        '<a data-act="artist-tab" data-tab="' + it[0] + '"' +
+        (it[0] === tab ? ' class="nm3-on"' : '') + '>' + esc(it[1]) +
+        (it[2] ? '<em>' + esc(it[2]) + '</em>' : '') + '</a>'
+      ).join('') + '</div></div>';
+  }
+
+  /** 「加载更多」（只有还有下一页时才出现） */
+  function moreHtml(more) {
+    if (!more) return '';
+    return '<div class="nm3-more-wrap"><button class="nm3-btn" data-act="artist-more"' +
+      (detail.listBusy ? ' disabled' : '') + '>' +
+      (detail.listBusy ? '正在加载…' : '加载更多') + '</button></div>';
+  }
+
   function detailHtml() {
-    const kindLabel = { playlist: '歌单', album: '专辑', artist: '歌手热门' }[detail.kind] || '歌单';
-    const cover = pic(detail.cover, 220);
+    const kindLabel = { playlist: '歌单', album: '专辑', artist: '歌手' }[detail.kind] || '歌单';
     const round = detail.kind === 'artist' ? ' nm3-round' : '';
+    const isArtist = detail.kind === 'artist';
+    const tab = isArtist && detail.artistTab === 'albums' ? 'albums' : 'songs';
 
     const head =
       '<div class="nm3-dh">' +
         '<button class="nm3-back" data-act="back">' + SVG.back(13, 'currentColor') + '返回</button>' +
         '<div class="nm3-dh-cover' + round + '">' +
-          (cover ? '<img src="' + esc(cover) + '" alt="">' : '') +
+          imgHtml(detail.cover, 220) +
         '</div>' +
         '<div class="nm3-dh-info">' +
           '<div class="nm3-dh-name" title="' + esc(detail.title || '') + '">' +
             esc(detail.title || kindLabel) + '</div>' +
           '<div class="nm3-dh-meta">' + esc(kindLabel) + ' · ' +
-            (detail.busy ? '加载中…' : fmtCount(detail.tracks.length) + ' 首') +
+            (detail.busy
+              ? '加载中…'
+              : (tab === 'albums'
+                  ? fmtCount(detail.albums.length) + ' 张专辑'
+                  : fmtCount(detail.tracksTotal || detail.tracks.length) + ' 首')) +
             (detail.sub ? ' · ' + esc(detail.sub) : '') + '</div>' +
         '</div>' +
         '<button class="nm3-btn nm3-primary" data-act="playdetail"' +
@@ -4782,10 +5246,20 @@
       '</div>';
 
     const bio = briefHtml();
-    if (detail.busy) return head + stateBlock('正在读取…', '', { loading: true });
-    if (detail.error) return head + bio + stateBlock(detail.error.message || '加载失败', '返回上一页可以换一个。');
-    if (!detail.tracks.length) return head + bio + stateBlock('这里没有可播放的歌曲', '换一个试试。');
-    return head + bio + trackListHtml(detail.tracks, { list: 'detail' });
+    const tabs = artistTabsHtml();
+    if (detail.busy) return head + tabs + stateBlock('正在读取…', '', { loading: true });
+    if (detail.error) return head + tabs + bio + stateBlock(detail.error.message || '加载失败', '返回上一页可以换一个。');
+
+    if (tab === 'albums') {
+      if (detail.listBusy && !detail.albums.length) return head + tabs + bio + stateBlock('正在读取专辑…', '', { loading: true });
+      if (!detail.albums.length) return head + tabs + bio + stateBlock('这位歌手暂时没有专辑信息', '换一位试试。');
+      return head + tabs + bio +
+        '<section class="nm3-sec"><div class="nm3-grid">' +
+          detail.albums.map(albumCard).join('') + '</div>' + moreHtml(detail.albumsMore) + '</section>';
+    }
+
+    if (!detail.tracks.length) return head + tabs + bio + stateBlock('这里没有可播放的歌曲', '换一个试试。');
+    return head + tabs + bio + trackListHtml(detail.tracks, { list: 'detail' }) + moreHtml(detail.tracksMore);
   }
 
   /* ═══════════════════════════ 播放 ═══════════════════════════ */
@@ -4848,10 +5322,9 @@
     }
   }
 
+  /** 详情页那一份列表的第 i 首（搜索页的行不走这里，见 playTrackAt） */
   function playDetailAt(i) {
-    const s = detail.tracks[i];
-    if (!s) return;
-    if (playList(detail.tracks, i)) { toast('正在播放：' + (s.name || '')); refreshCurrentSoon(); }
+    return playTrackAt('detail', i);
   }
 
   function refreshCurrentSoon() {

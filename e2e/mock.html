@@ -1,0 +1,336 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<title>E2E: netease-music-lite</title>
+<style>
+  /* 站点的骨架：脚本会把这些自己藏起来，只留自绘界面 */
+  body { margin: 0; background: #fff; font: 12px/1.5 sans-serif; }
+  .g-topbar { height: 70px; }
+  .g-bd { margin-top: -75px; padding-top: 75px; }
+  .g-iframe { position: absolute; top: 0; height: 100%; width: 100%; }
+  .g-btmbar { position: fixed; bottom: 0; height: 0; }
+  .m-playbar { position: absolute; top: -53px; height: 53px; width: 100%; }
+  .m-playbar .wrap { display: flex; align-items: center; gap: 12px; height: 53px; }
+  .m-playbar .m-vol .vbg { height: 60px; }
+  #nm3-e2e { position: fixed; left: 0; bottom: 0; right: 0; z-index: 99999; max-height: 46vh; overflow: auto;
+             margin: 0; padding: 8px 10px; background: #06070c; color: #9fe870; font: 13px/1.6 monospace;
+             white-space: pre-wrap; border-top: 2px solid #4EA4EF; }
+</style>
+<body>
+  <div class="g-topbar"></div>
+  <div class="g-bd"><div id="g_iframe" class="g-iframe"></div></div>
+  <div class="g-btmbar">
+    <div class="m-playbar">
+      <div class="wrap">
+        <div class="btns">
+          <a data-action="prev" href="#"></a>
+          <a data-action="play" href="#"></a>
+          <a data-action="next" href="#"></a>
+        </div>
+        <a data-action="like" href="#"></a>
+        <a data-action="share" href="#"></a>
+        <div class="m-vol"><div class="vbg"></div></div>
+        <a data-action="mode" title="随机" href="#"></a>
+        <a data-action="panel" href="#">0</a>
+        <a data-action="audioQuality" href="#"></a>
+      </div>
+    </div>
+  </div>
+  <div id="g_player"><div class="head"><img src=""></div></div>
+  <audio id="mock-audio" preload="none"></audio>
+
+<script>
+/* ═══════════ 模拟站点：接口 + 播放器 ═══════════ */
+window.__e2e = { logs: [] };
+(function () {
+  const ow = console.warn, oe = console.error;
+  const fmt = (a) => Array.prototype.map.call(a, (x) => {
+    try { return typeof x === 'string' ? x : JSON.stringify(x); } catch (e) { return String(x); }
+  }).join(' ');
+  console.warn = function () { window.__e2e.logs.push('WARN ' + fmt(arguments)); return ow.apply(console, arguments); };
+  console.error = function () { window.__e2e.logs.push('ERROR ' + fmt(arguments)); return oe.apply(console, arguments); };
+})();
+const PLAIN = 'http://p1.music.126.net/WFQ4EKF5QabD33U3NUOPWQ==/109951169535051638.jpg';
+/* 站点给「自定义封面」做的服务端合成封面（实测能取到、1.1 MB 那张就是这个形状） */
+const COMPOSITE = 'http://p1.music.126.net/LRy_w_gMx3_UdByZPYisFQ==/109951169261372186.jpg' +
+  '?imageView=1&thumbnail=800y800&enlarge=1%7CimageView=1&watermark&type=1' +
+  '&image=b2JqL3c1bkRrTUtRd3JMRGpEekNtOE9tLzc4MzAyNjIwMzQxLzAzNTYvMjAyNjE5MTUxNjU4L3gyNzkxNzcwNjIxNDE4NzA3LnBuZw==' +
+  '&dx=0&dy=0%7CimageView=1';
+
+const SEARCH_SONGS = [
+  { id: 101, name: '搜索第一首', dt: 200000, al: { id: 1, name: '专辑一', picUrl: PLAIN }, ar: [{ id: 6452, name: '周杰伦' }], fee: 0 },
+  { id: 102, name: '搜索第二首', dt: 210000, al: { id: 2, name: '专辑二', picUrl: COMPOSITE }, ar: [{ id: 6452, name: '周杰伦' }], fee: 0 },
+  { id: 103, name: '搜索第三首', dt: 220000, al: { id: 3, name: '专辑三', picUrl: PLAIN }, ar: [{ id: 6452, name: '周杰伦' }], fee: 0 }
+];
+const SEARCH_ARTISTS = [{ id: 6452, name: '周杰伦', picUrl: COMPOSITE, alias: ['Jay'], albumSize: 40 }];
+const SEARCH_ALBUMS = [{ id: 274336916, name: '即兴曲', picUrl: COMPOSITE, size: 1, artist: { name: '周杰伦' } }];
+const SEARCH_PLAYLISTS = [
+  { id: 2800713929, name: '古典主义音乐', coverImgUrl: COMPOSITE, trackCount: 42, creator: { nickname: '某人' } },
+  { id: 24381616, name: '普通歌单', coverImgUrl: PLAIN, trackCount: 7, creator: { nickname: '某人' } }
+];
+const artistSongs = (offset) => Array.from({ length: offset >= 100 ? 6 : 50 }, (_, i) => {
+  const id = 1000 + offset + i;
+  return { id, name: '歌手歌曲' + (offset + i), duration: 180000, fee: 0,
+    album: { id: 500 + i, name: '专辑' + (offset + i), picUrl: i % 3 === 0 ? COMPOSITE : PLAIN },
+    artists: [{ id: 6452, name: '周杰伦' }] };
+});
+const artistAlbums = (offset) => Array.from({ length: offset >= 30 ? 14 : 30 }, (_, i) => ({
+  id: 9000 + offset + i, name: '歌手专辑' + (offset + i), size: 1 + (i % 5),
+  picUrl: i % 2 === 0 ? COMPOSITE : PLAIN, artist: { id: 6452, name: '周杰伦' }
+}));
+
+const liked = new Set();
+const calls = [];
+const json = (o) => ({ ok: true, status: 200, json: async () => o });
+const trackOf = (id) => Object.assign({}, SEARCH_SONGS.find((s) => String(s.id) === String(id)) || SEARCH_SONGS[0], { id: Number(id) });
+const origFetch = window.fetch.bind(window);
+window.__e2e.origFetch = origFetch;
+
+window.fetch = async function (url, init) {
+  const u = new URL(String(url), location.href);
+  const p = u.pathname;
+  const params = {};
+  u.searchParams.forEach((v, k) => { params[k] = v; });
+  const body = {};
+  if (init && init.body) {
+    try { new URLSearchParams(init.body).forEach((v, k) => { body[k] = v; }); } catch (e) {}
+  }
+  calls.push({ path: p, params: params, body: body, method: (init && init.method) || 'GET' });
+
+  if (p === '/api/nuser/account/get') return json({ profile: { userId: 777, nickname: '测试用户', avatarUrl: PLAIN } });
+  if (p === '/api/user/playlist') {
+    return json({ playlist: [{ id: 501, specialType: 5, name: '我喜欢的音乐', coverImgUrl: PLAIN, trackCount: liked.size, creator: { nickname: '测试用户' } }] });
+  }
+  if (p === '/api/v6/playlist/detail') {
+    return json({ playlist: { id: 501, name: '我喜欢的音乐', coverImgUrl: PLAIN, trackCount: liked.size,
+      creator: { nickname: '测试用户' },
+      trackIds: Array.from(liked).map((id) => ({ id: Number(id) })),
+      tracks: Array.from(liked).map((id) => trackOf(id)) } });
+  }
+  /* ★ 老路由：和用户环境一样被风控拦掉（这就是「收藏没用」的原因） */
+  if (p === '/api/radio/like') return json({ code: -460, message: '检测到您的网络环境存在风险，请稍后再试' });
+  if (p === '/api/v1/radio/like') {
+    if (body.like === 'false') liked.delete(body.trackId); else liked.add(String(body.trackId));
+    return json({ code: 200 });
+  }
+  if (p === '/api/v1/playlist/manipulate/tracks') {
+    (JSON.parse(body.trackIds || '[]') || []).forEach((id) => {
+      if (body.op === 'del') liked.delete(String(id)); else liked.add(String(id));
+    });
+    return json({ code: 200 });
+  }
+  if (p === '/api/cloudsearch/pc' || p === '/api/search/get') {
+    const t = Number(params.type);
+    const r = { songCount: SEARCH_SONGS.length, artistCount: SEARCH_ARTISTS.length,
+      albumCount: SEARCH_ALBUMS.length, playlistCount: SEARCH_PLAYLISTS.length };
+    if (t === 1) r.songs = SEARCH_SONGS;
+    else if (t === 100) r.artists = SEARCH_ARTISTS;
+    else if (t === 10) r.albums = SEARCH_ALBUMS;
+    else r.playlists = SEARCH_PLAYLISTS;
+    return json({ code: 200, result: r });
+  }
+  if (p === '/api/v1/artist/6452') {
+    return json({ code: 200, artist: { id: 6452, name: '周杰伦', picUrl: COMPOSITE, alias: ['Jay'], briefDesc: '歌手简介文本' } });
+  }
+  if (p === '/api/v1/artist/songs') {
+    const offset = Number(params.offset) || 0;
+    return json({ code: 200, songs: artistSongs(offset), more: offset < 100, total: 106 });
+  }
+  if (p === '/api/artist/top/song') return json({ code: 200, songs: artistSongs(0) });
+  if (/^\/api\/artist\/albums\//.test(p)) {
+    const offset = Number(params.offset) || 0;
+    return json({ code: 200, hotAlbums: artistAlbums(offset), more: offset < 30 });
+  }
+  if (/^\/api\/v1\/album\//.test(p)) {
+    return json({ code: 200, album: { id: Number(p.split('/').pop()), name: '即兴曲', picUrl: COMPOSITE, artist: { name: '周杰伦' } },
+      songs: artistSongs(0).slice(0, 3) });
+  }
+  if (p === '/api/v3/song/detail' || p === '/api/v1/song/detail' || p === '/api/song/detail') {
+    return json({ code: 200, songs: SEARCH_SONGS });
+  }
+  if (p === '/api/song/lyric/v1' || p === '/api/song/lyric') {
+    return json({ code: 200, lrc: { lyric: '[00:00.00]测试歌词一行\n[00:10.00]测试歌词二行' }, tlyric: { lyric: '' } });
+  }
+  if (/comment/.test(p)) return json({ code: 200, hotComments: [], comments: [], total: 0 });
+  if (p === '/api/song/enhance/player/url/v1') return json({ code: 200, data: [{ url: null }] });
+  return json({ code: 200 });
+};
+
+/* ═══════════ 播放器桩（脚本只用 addTo / getPlaying） ═══════════ */
+const addToCalls = [];
+let currentTrack = { id: 900, name: '初始歌曲', duration: 200000,
+  album: { id: 1, name: '专辑', picUrl: PLAIN }, artists: [{ id: 6452, name: '周杰伦' }] };
+let playing = true;
+window.GUser = { userId: 777 };
+window.player = {
+  addTo(list, replaceQueue, playNow) {
+    addToCalls.push({ names: list.map((s) => s.name), ids: list.map((s) => s.id), replaceQueue: replaceQueue, playNow: playNow });
+    if (list && list.length) currentTrack = list[0];
+    playing = true;
+  },
+  getPlaying() { return { track: currentTrack, playing: playing }; },
+  pause() { playing = false; },
+  setLike() {},
+  tipPlay() {},
+  hotkeys: {}
+};
+window.__e2e = { report: null, liked: liked, calls: calls, addToCalls: addToCalls };
+</script>
+
+<!-- 被测脚本 -->
+<script src="/netease-music-lite.user.js"></script>
+
+<script>
+/* ═══════════ 驱动：像用户那样点 ═══════════ */
+const report = { errors: [], steps: {} };
+window.__e2e.report = report;
+window.addEventListener('error', (e) => report.errors.push(String(e && e.message || e)));
+window.addEventListener('unhandledrejection', (e) => report.errors.push('unhandled: ' + String(e && e.reason)));
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const $ = (s) => document.querySelector(s);
+const $$ = (s) => Array.from(document.querySelectorAll(s));
+const click = (el) => {
+  if (!el) return false;
+  el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+  return true;
+};
+const src = (el) => (el ? el.getAttribute('src') : null);
+const text = (el) => (el ? String(el.textContent || '').trim() : null);
+
+(async () => {
+  await sleep(1000);
+  report.steps.boot = { panel: !!$('#nm3-panel'), bar: !!$('#nm3-bar'), tab: !!(document.querySelector('.nm3-tab.nm3-on')) };
+
+  /* ① 搜索 → 点第 2 行：必须播「搜索结果」里的那首 */
+  const input = $('#nm3-input');
+  input.value = '周杰伦';
+  input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  await sleep(700);
+  const rows = $$('#nm3-search-host .nm3-track');
+  const wrap = $('#nm3-search-host .nm3-tracks');
+  report.steps.search = {
+    rows: rows.length,
+    listKey: wrap && wrap.getAttribute('data-list'),
+    rowCover: src($('#nm3-search-host .nm3-t-cover img')),
+    rowCoverCompositeHasSize: /thumbnail=300y300$/.test(String(src($('#nm3-search-host .nm3-t-cover img'))).replace('&amp;', '&'))
+  };
+  addToCalls.length = 0;
+  click(rows[1]);
+  await sleep(400);
+  report.steps.clickSecondRow = {
+    played: addToCalls.length ? addToCalls[0].names[0] : null,
+    expect: SEARCH_SONGS[1].name,
+    queueFirst: addToCalls.length ? addToCalls[0].names.slice(0, 3) : null
+  };
+
+  /* ② 搜索页 → 歌手 tab → 点歌手卡片 */
+  click($('#nm3-search-host [data-act="stype"][data-type="100"]'));
+  await sleep(700);
+  const artistCards = $$('#nm3-search-host .nm3-card[data-kind="artist"]');
+  report.steps.artistSearch = { cards: artistCards.length, cover: src($('#nm3-search-host .nm3-card-cover img')) };
+  click(artistCards[0]);
+  await sleep(900);
+  report.steps.artistDetail = {
+    name: text($('.nm3-dh-name')),
+    tabs: $$('.nm3-dh-tabs .nm3-seg a').map((a) => text(a)),
+    activeTab: text($('.nm3-dh-tabs .nm3-seg a.nm3-on')),
+    songRows: $$('#nm3-search-host .nm3-track').length,
+    more: !!$('#nm3-search-host [data-act="artist-more"]'),
+    meta: text($('.nm3-dh-meta')),
+    headerCover: src($('.nm3-dh-cover img'))
+  };
+
+  /* ③ 全部歌曲「加载更多」 */
+  click($('#nm3-search-host [data-act="artist-more"]'));
+  await sleep(900);
+  report.steps.artistMore = {
+    songRows: $$('#nm3-search-host .nm3-track').length,
+    moreStillThere: !!$('#nm3-search-host [data-act="artist-more"]')
+  };
+
+  /* ④ 专辑页签 */
+  click($('[data-act="artist-tab"][data-tab="albums"]'));
+  await sleep(900);
+  const albumCards = $$('#nm3-search-host .nm3-card[data-kind="album"]');
+  report.steps.artistAlbums = {
+    cards: albumCards.length,
+    more: !!$('#nm3-search-host [data-act="artist-more"]'),
+    firstCover: src($('#nm3-search-host .nm3-card-cover img')),
+    firstCoverKeepsWatermark: /imageView=1/.test(String(src($('#nm3-search-host .nm3-card-cover img')))),
+    firstCoverHasSmallThumb: /thumbnail=300y300$/.test(String(src($('#nm3-search-host .nm3-card-cover img'))))
+  };
+
+  /* ⑤ 专辑 → 返回：要回歌手页，不是退回搜索结果 */
+  click(albumCards[0]);
+  await sleep(900);
+  report.steps.albumDetail = { name: text($('.nm3-dh-name')), rows: $$('#nm3-search-host .nm3-track').length };
+  click($('[data-act="back"]'));
+  await sleep(500);
+  report.steps.backToArtist = {
+    isArtistPage: !!$('.nm3-dh-tabs'),
+    name: text($('.nm3-dh-name')),
+    songRows: $$('#nm3-search-host .nm3-track').length,
+    albumsTabStill: !!$('[data-act="artist-tab"][data-tab="albums"]')
+  };
+
+  /* ⑥ 收藏：老路由 -460，v1 路由应当兜住 */
+  click($('[data-act="ctl-like"]'));
+  await sleep(3000);
+  report.steps.like = {
+    toast: text($('.nm3-toast')),
+    likedSize: liked.size,
+    writes: calls.filter((c) => /radio\/like|manipulate\/tracks/.test(c.path))
+      .map((c) => c.path + (c.body.op ? ('?op=' + c.body.op) : ('?like=' + c.body.like)))
+  };
+
+  /* ⑦ 封面兜底：手动把一张封面弄坏，error 监听应当把它换成原图/占位图 */
+  const img = $('#nm3-search-host .nm3-card-cover img') || $('#nm3-search-host .nm3-t-cover img');
+  if (img) {
+    const before = src(img);
+    img.setAttribute('src', 'https://p1.music.126.net/__definitely_missing__.jpg?param=300y300');
+    await sleep(600);
+    report.steps.coverFallback = { before: before, after: src(img), changed: src(img) !== 'https://p1.music.126.net/__definitely_missing__.jpg?param=300y300' };
+  }
+
+  report.errors = report.errors;
+  document.title = 'E2E ' + (report.errors.length ? 'ERRORS' : 'OK');
+  const pre = document.createElement('pre');
+  pre.id = 'nm3-e2e';
+  pre.textContent = 'RESULT ' + (report.errors.length ? ('ERRORS(' + report.errors.length + ')') : 'OK') +
+    '  jsErrors=' + JSON.stringify(report.errors) +
+    '\nsearch.rows=' + report.steps.search.rows + ' listKey=' + report.steps.search.listKey +
+    ' clickRow2=' + report.steps.clickSecondRow.played + ' (expect ' + report.steps.clickSecondRow.expect + ')' +
+    '\nartist: cards=' + report.steps.artistSearch.cards + ' name=' + report.steps.artistDetail.name +
+    ' tabs=' + JSON.stringify(report.steps.artistDetail.tabs) + ' meta=' + report.steps.artistDetail.meta +
+    '\nsongs=' + report.steps.artistDetail.songRows + ' more=' + report.steps.artistDetail.more +
+    ' afterMore=' + report.steps.artistMore.songRows + '/' + report.steps.artistMore.moreStillThere +
+    ' albums=' + report.steps.artistAlbums.cards + ' albMore=' + report.steps.artistAlbums.more +
+    '\nalbumCoverEndsWith300y300=' + report.steps.artistAlbums.firstCoverHasSmallThumb +
+    ' keepsWatermark=' + report.steps.artistAlbums.firstCoverKeepsWatermark +
+    '\nback: isArtist=' + report.steps.backToArtist.isArtistPage + ' name=' + report.steps.backToArtist.name +
+    '\nLIKE toast=[' + report.steps.like.toast + '] liked=' + report.steps.like.likedSize +
+    ' writes=' + JSON.stringify(report.steps.like.writes) +
+    '\ncoverFallback changed=' + (report.steps.coverFallback || {}).changed;
+  document.body.appendChild(pre);
+  const full = document.createElement('pre');
+  full.id = 'nm3-e2e-full';
+  full.style.cssText = 'position:absolute;left:-99999px;top:0';
+  full.textContent = JSON.stringify(report) + '\n@@LOGS@@\n' +
+    window.__e2e.logs.slice(0, 15).join('\n') + '\n@@APICALLS@@\n' +
+    calls.map((c) => c.path + ' type=' + (c.params.type || '') + ' off=' + (c.params.offset || '') +
+      (c.body.op ? (' op=' + c.body.op) : '') + (c.body.like ? (' like=' + c.body.like) : '')).join('\n');
+  document.body.appendChild(full);
+
+  // 报告 POST 给本地收集器（真实 http 源，绕开 file:// 的各种限制）
+  try {
+    await origFetch('/__report', {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain' },
+      body: JSON.stringify({ report: report, logs: window.__e2e.logs, calls: calls })
+    });
+  } catch (e) { /* noop */ }
+})();
+</script>
+</body>
+</html>
