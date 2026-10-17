@@ -58,6 +58,49 @@ const CONFIG = {
 
 ---
 
+## 🧩 全功能版（本机构建，不进仓库）
+
+不想每次手改三个开关，可以让脚本自己生成一份**全功能版**：
+
+```bash
+node tools/build-full.cjs
+# → netease-music-full.user.js（同目录，~264 KB）
+```
+
+它做四件**替换字面量**的事（不做正则改写，找不到锚点直接报错停下）：
+
+| 改什么 | 公开版 | 全功能版 |
+| --- | --- | --- |
+| `CONFIG.ALLOW_CLIENT_SPOOF` | `false` | **`true`** —— 伪装 PC 客户端姿态取流 + 救场播放 |
+| `CONFIG.ALLOW_DOWNLOAD` | `false` | **`true`** —— 控制台出现下载按钮 |
+| `CONFIG.DOWNLOAD_LRC` | `false` | **`true`** —— 下载时顺带写双语 `.lrc` |
+| `CONFIG.FULL_BUILD` | `false` | **`true`** —— 页头挂「全功能版」标 + 启动提示 |
+
+除此之外**一行代码都不改**：皮肤、红心、歌词、歌手页通通一样，`@version` 也跟着主脚本走。
+
+![全功能版](e2e/full-build.png)
+
+页头那个橙色「全功能版」标（上面截图里 `网易云音乐` 右边那颗）就是为此存在的 —— 它下面那排控件多出来一个 **⤓ 下载**按钮，启动时还会弹一句"已开启下载 / 客户端姿态取流"。装了两份的时候，一眼就能分清现在跑的是哪一份。
+
+**为什么它不进仓库：** 这三样正是权利方最常点名的一类功能，`ALLOW_CLIENT_SPOOF` 还可能被认定为「避开访问控制技术措施」。公开仓库只放三个开关为 `false` 的 lite 版，生成物写在 `.gitignore` 里 —— 要不要留一份在自己机器上、要不要给别人，由你自己判断。
+
+**用的时候注意：**
+
+1. **别和 lite 版同时装。** 两份的 `@match` 完全一样，同时启用会把页头打两遍。装全功能版前，先在 Tampermonkey 里把 lite 那份**停用或删掉**；
+2. 主脚本更新后**重新生成**（`node tools/build-full.cjs`），不要手改生成物 —— 手改的那份会跟主脚本漂移；
+3. 生成物里写清了它是从哪一版、什么时候生成的（头部那段 `▲ 这是「全功能版」`）。
+
+**验证：** `node netease-music-lite.full.test.cjs` 会钉死「公开版三个开关永远是 false」，并检查生成物开关全开、`@name` 写了「全功能版」、能被 `node --check` 解析、**幂等**、且**公开版字节不变**；e2e 也能跑这份：
+
+```bash
+node e2e/server.cjs
+# 浏览器打开 http://127.0.0.1:8791/mock.html?build=full
+```
+
+此时页面里会多断言一条：`build badge=true text=全功能版 dlBtns=1`（lite 版是 `badge=false dlBtns=0`）。
+
+---
+
 ## 🩹 v4.10.0 修了什么（红心：点了没反应）
 
 > 只动收藏这一条链路，其它功能没碰。上一版（v4.9.0）就有"多条口径兜底"，但还是不灵 ——
@@ -581,8 +624,9 @@ GET /api/comment/music?id=…     HTTP 200  {"code":404,"message":"接口未找�
 - **歌词 + 点赞/收藏回归测试**（`node netease-music-lite.lyric-like.test.cjs`，15 组）：把歌词段与点赞/收藏段原样抽出来跑桩 —— LRC 多时间戳 / `[offset:]` / 元数据行、`yrc` 逐字解析（真实片段）、翻译与罗马音挂行（行数一致按序、不一致按 ±1 秒就近、对不上就丢）、分组渲染（主 + 译 + 罗同组）、当前组一起点亮、逐字随播放点亮且往回拖会重置、双语 `.lrc` 文本（原文与翻译同时间戳）；评论点赞走 `/like`、取消走 `/unlike`、换口径重试、`301/400/-460` 各自的提示语；**收藏**：三条官方口径（`/api/v1/playlist/manipulate/tracks`、`/api/v1/radio/like`、`/api/radio/like`）的路径与参数、`like=false`/`op=del` 才是取消、姿态开关开着才带 `os=pc`、老路由回 `-460` 时自动换口径并成功、`subscribe`「存在但静默无效」时必须继续点原生 ♡、几条都不成才报失败（且优先报 `-460` 而不是"静默 200"）、未登录直接提示登录且不发写请求、`trackIds` 空时退回 `tracks`；**v4.10.0 新增（`ok 11b`）**：写成功但歌单详情被 CDN 缓存时要重试到看见变化（否则成功也报失败）、服务端 `200` 但状态读不回来时只能说"已提交"、并发读「我喜欢的音乐」要合并成一次而不是各读半截。
 - **封面 / 点行播放 / 歌手详情回归测试**（`node netease-music-lite.cover-artist.test.cjs`，9 组）：`pic()` 对**合成封面**要把尺寸追加到 ops 链末尾、整串 query（含 watermark 的 base64）不能丢、已有 `param=` 要改写不能叠加；`imgHtml()` 带 `data-nm3raw`、转义正确；`onCoverError()` 先退回站点原图、再换占位图、不循环；`trackListHtml` 的 `data-list` 与数组登记；`playTrackAt`/`onPanelClick` **搜索行只播搜索结果**（回归那个 bug）；歌手详情 `loadArtistMore`/`setArtistTab` 的翻页累加与 `more` 收敛、专辑页签懒加载；详情栈「歌手 → 专辑 → 返回」；`detailHtml()` 真的渲染出页签 / 全部歌曲 / 专辑栅格 / 加载更多（并检查标签闭合）。
 - **开关 + 免责声明测试**（`node netease-music-lite.switches.test.cjs`，6 组）：把客户端姿态那段原样抽出来跑桩 —— **默认值必须是 `false`**（源码级断言，防止有人改回开启）；关着时不写任何 cookie、URL 不追加 `os/appver/…`、取流请求不带客户端字段、救场连音频元素都不碰；打开后三处都补齐（证明开关真的有效而非死代码）；`downloadAllowed()` 取值、下载按钮的条件渲染、`downloadCurrent()` 开头的兜底拦截、`DOWNLOAD_LRC` 独立判断；脚本头部免责声明关键词（个人学习 / 严禁商业用途 / 不绕过付费 / 24 小时内删除 / 服务条款 / 两个开关 / 现状）与 `@description` 里的"仅供个人学习研究""默认关闭"。（"开关关着时写接口不带 `os=pc`"这一条在 lyric-like 那套的第 10 组里。）
-- **端到端冒烟测试（真实浏览器 + 模拟站点，`e2e/`）**：`node e2e/server.cjs` 起一个迷你静态服务器，用 Chrome/Edge 无头模式打开 `mock.html`，由一段驱动脚本**像用户那样点**（搜索、点第 2 行、切歌手、加载更多、切专辑、点专辑、返回、点 ♡），最后把结论打进页面。`fetch` 被换成桩并**故意让 `/api/radio/like` 回 `-460`**，复现用户那边"收藏没用"的环境。最近一次结果：`RESULT OK jsErrors=[]`，`clickRow2=搜索第二首`，`tabs=["全部歌曲106","专辑"]`，`songs=50 more=true afterMore=100/true albums=30`，`albumCoverEndsWith300y300=true keepsWatermark=true`，`back: isArtist=true`，`LIKE toast=[已收藏到「我喜欢的音乐」] writes=["/api/v1/playlist/manipulate/tracks?op=add"]`，`coverFallback changed=true`。，最后新加一步**连点三下皮肤按钮**：`skin cycle=["ink","rhine-day","rhine-night","ink"] accents=["#4EA4EF","#C2571F","#E4692A","#4EA4EF"] chip=原皮`（连 `<html>` 上真取到的主色都跟着变，不是只改了属性）。截图存在 `e2e/artist-page.png`（原皮）、`e2e/skin-rhine-day.png`、`e2e/skin-rhine-night.png`；加 `?skin=rhine-day` 可直接进对应皮肤。
+- **端到端冒烟测试（真实浏览器 + 模拟站点，`e2e/`）**：`node e2e/server.cjs` 起一个迷你静态服务器，用 Chrome/Edge 无头模式打开 `mock.html`，由一段驱动脚本**像用户那样点**（搜索、点第 2 行、切歌手、加载更多、切专辑、点专辑、返回、点 ♡），最后把结论打进页面。`fetch` 被换成桩并**故意让 `/api/radio/like` 回 `-460`**，复现用户那边"收藏没用"的环境。最近一次结果：`RESULT OK jsErrors=[]`，`clickRow2=搜索第二首`，`tabs=["全部歌曲106","专辑"]`，`songs=50 more=true afterMore=100/true albums=30`，`albumCoverEndsWith300y300=true keepsWatermark=true`，`back: isArtist=true`，`LIKE toast=[已收藏到「我喜欢的音乐」] writes=["/api/v1/playlist/manipulate/tracks?op=add"]`，`coverFallback changed=true`；最后一步**构建核对**：lite 版 `build badge=false dlBtns=0`，换成 `?build=full`（先 `node tools/build-full.cjs`）后 `build badge=true text=全功能版 dlBtns=1`，且标与下载按钮必须一致（一边有一边没有就记成 jsError）。，最后新加一步**连点三下皮肤按钮**：`skin cycle=["ink","rhine-day","rhine-night","ink"] accents=["#4EA4EF","#C2571F","#E4692A","#4EA4EF"] chip=原皮`（连 `<html>` 上真取到的主色都跟着变，不是只改了属性）。截图存在 `e2e/artist-page.png`（原皮）、`e2e/skin-rhine-day.png`、`e2e/skin-rhine-night.png`；加 `?skin=rhine-day` 可直接进对应皮肤。
 - **皮肤回归测试**（`node netease-music-lite.skin.test.cjs`，9 组）：把真实的皮肤代码段原样抽出来跑桩 —— 三套皮肤都注册了（chip 文案 `原皮`/`晨雾`/`月影`）；默认原皮且**不给 `<html>` 挂属性**（CSS 靠"属性缺失 = 原皮"）；循环切换 `原皮 → 晨雾 → 月影 → 原皮` 并写进 `localStorage`、切回原皮要摘属性；预置 `nm3.skin=rhine-night` 时启动即挂属性（不闪一帧原皮）；非法存值回落原皮；按钮文案与 `title` 跟着皮肤走；`document-start` 阶段**还没有 `<html>`** 时不抛错、等 `DOMContentLoaded` 补挂；样式层两套莱茵皮肤变量齐全、`SKIN_CSS` 里**不含任何原皮色**（抄进来就等于"换了皮肤还是蓝的"）、装饰规则全部带 `html[data-nm3-skin^="rhine"]` 前缀；接线四处都在（按钮、点击、注入 `SKIN_CSS`、启动 `applySkin()`）。
+- **全功能版构建测试**（`node netease-music-lite.full.test.cjs`，8 组）：公开版三个开关与 `FULL_BUILD` 必须是 `false`（源码级，防止有人悄悄改回）；公开版页头**不输出**标记、启动**不弹**提示；全功能版标记带 `id=nm3-full`、文字「全功能版」、`title` 说明开了哪几样，启动正好提示一次；`buildBar` 与 `boot` 两处接线都在；生成物四个开关全 `true`、`@name` 带「全功能版」、带构建时间、`@description` 写明请勿分发；生成物能过 `node --check`；**幂等**且**公开版字节不变**；锚点缺失或重复时明确抛错（宁可不生成，也不生成半成品）。
 - **线上包实测（v4.10.0，红心的根因证据）**：从 `music.163.com` 拉下现在线上的三个包 —— `core_c7686f50….js`（699 KB，播放器/队列）、`pt_frame_index_….js`（209 KB，框架）、`discover_….js`（33 KB，首页推荐）—— 逐个扫接口名：**`/api/radio` 一次都没出现**，也没有 `window.subscribe`；写"喜欢"的只有 `/api/resource/like` / `/api/resource/unlike`（用于 `A_DJ_1_<id>` 这类节目 threadId 和评论），而**歌曲红心**走的是 `playlist/manipulate/tracks`（`data.op: add` / `del`、`trackIds` 整串 JSON、错误码 `502`=歌曲已存在、`505`=歌单已满、`521`=需绑定手机号）。★ 结论：对"歌曲"而言老路由 `/api/radio/like` 已经不是站点在用的收藏接口，`/api/v1/radio/like` 只是它的 v1 路由（可用，但不是官方现路），所以 v4.10.0 把它挪到 `/api/v1/playlist/manipulate/tracks` 之后。
 - **写操作的线上实测（未登录，只读探测；v4.9.0 复测）**：`/api/v1/comment/like` 与 `/api/v1/comment/unlike` 都在（回 `301`），裸 `threadId` 回 `400 illegal resourceId!`，假路由回 `404`；`/api/radio/like` 回 `-460`（风控）—— ★ 这次**带上 `os=pc; appver; channel; osver` 这套 cookie 也照样回 `-460`**，说明风控还看出口 IP，作者当初"带姿态就回 301"的结论不是所有环境都成立；`/api/v1/radio/like`、`/api/v1/playlist/manipulate/tracks`（`op=add&pid=…&trackIds=[…]`）、`/api/v1/artist/songs`、`/api/artist/albums/<id>` 都回正常的 `301`（即认证层，能到就会在登录后生效），`/api/v1/artist/albums/…` 与 `/api/v1/song/like` 回 `404`；`/api/song/lyric/v1` 一次拿回 `lrc` + `tlyric` + `romalrc`（Lemon，1761 / 969 / 2190 字节）。★ 带登录态的**写入结果**本机验不了，见上一条"诚实说明"。
 - **封面 URL 形态实测**：抽了 720 个搜索结果的歌单封面 —— 全部是 `http://p1.music.126.net/…jpg`（要升级 https），其中 **92 个（12.8%）**自带 `?imageView=1&thumbnail=800y800&…&watermark&…` 的合成 query，且**全部**以 `%7CimageView=1` 收尾；`&param=`/`thumbnail=`（不在 imageView 里）这两种情况在这批数据里是 0 个。curl 实测：合成 URL 直接加 `&param=300y300` 大小不变（被忽略，最大 1.1 MB），把 `thumbnail=300y300` 追加到末尾后降到 180 KB；把整串 query 丢掉只剩模糊底图（截图确认）。
@@ -604,6 +648,7 @@ GET /api/comment/music?id=…     HTTP 200  {"code":404,"message":"接口未找�
 未验证（需要你在浏览器里实际跑一次）：
 
 - 三套皮肤在你**自己的显示器**上的观感 —— 我在无头 Edge 里把听歌页 / 列表页 / 详情页 / 三套皮肤都截图比过（见 `e2e/` 里那三张），但色域、缩放、深色模式跟随（`color-scheme`）只有真机才准；
+- **全功能版的真实下载** —— e2e 只验到「页头有标、控件栏有下载按钮、两者一致」（`build badge=true text=全功能版 dlBtns=1`）；真把音频写进「音乐」文件夹、`os=pc` 姿态在真站点上有没有被风控，得你本机跑；
 - 四个页签的实际观感与像素级定位，尤其播放条那层深蓝叠加、歌词悬停缩放的观感；
 - **点赞 / 收藏的写入结果** —— 要登录态，本机只能验到「未登录回 301」；脚本已经把失败原因和诊断窗口做好了，真出问题时看 `window.__nm3LikeLog`；
 - **歌词的观感** —— 翻译 / 罗马音的行距、当前组放大、逐字点亮的节奏，只有浏览器里看得出好不好看；
@@ -633,7 +678,10 @@ const CONFIG = {
   ALLOW_CLIENT_SPOOF: false, // ① 伪装 PC 客户端姿态取流（os=pc / appver…，含救场）
   ALLOW_DOWNLOAD: false,     // ② 下载（打开后控制台才出现下载按钮）
   DOWNLOAD_LRC: false,       // ③ 下载时顺带写双语 .lrc（仅当 ② 打开时有效）
-  DOWNLOAD_SUBDIR: ''        // 下载目录：选定「音乐」文件夹后再往里放的子文件夹名
+  DOWNLOAD_SUBDIR: '',       // 下载目录：选定「音乐」文件夹后再往里放的子文件夹名
+
+  // ★ 全功能版标记：只由 tools/build-full.cjs 打开，别手改
+  FULL_BUILD: false
 };
 ```
 
@@ -664,4 +712,6 @@ const SKINS = [                // 顺序就是按钮的循环顺序
 - `netease-music-lite.cover-artist.test.cjs` —— 封面（合成 URL / 兜底）+ 点行播放归属 + 歌手详情（全部歌曲 / 专辑 / 详情栈）的回归测试，`node netease-music-lite.cover-artist.test.cjs` 直接跑（见"验证情况"）
 - `netease-music-lite.switches.test.cjs` —— 免责声明 + 三个默认关闭开关的回归测试，`node netease-music-lite.switches.test.cjs` 直接跑（**把"默认必须关着"钉死**，见"验证情况"）
 - `netease-music-lite.skin.test.cjs` —— 三套皮肤（原皮 / 莱茵生命·晨雾 / 月影）的回归测试：切换顺序、记住选择、非法值回落、`document-start` 无 `<html>` 时不炸、样式层不含原皮色，`node netease-music-lite.skin.test.cjs` 直接跑（见"验证情况"）
-- `e2e/` —— 真实浏览器 + 模拟站点的端到端冒烟测试（`node e2e/server.cjs` + 无头 Chrome/Edge，见 `e2e/README.md` 与"验证情况"）；`artist-page.png` / `skin-rhine-day.png` / `skin-rhine-night.png` 是三套皮肤的验收截图
+- `netease-music-lite.full.test.cjs` —— 全功能版构建的回归测试：公开版三个开关必须仍是 `false`、生成物开关全开且 `@name` 带「全功能版」、可 `node --check`、幂等、公开版字节不变、锚点缺失/重复时明确报错，`node netease-music-lite.full.test.cjs` 直接跑
+- `tools/build-full.cjs` —— 生成全功能版的构建脚本（`node tools/build-full.cjs`），只做字面量替换；生成物 `netease-music-full.user.js` 在 `.gitignore` 里，不进公开仓库
+- `e2e/` —— 真实浏览器 + 模拟站点的端到端冒烟测试（`node e2e/server.cjs` + 无头 Chrome/Edge，见 `e2e/README.md` 与"验证情况"）；`artist-page.png` / `skin-rhine-day.png` / `skin-rhine-night.png` 是三套皮肤的验收截图，`full-build.png` 是全功能版（页头标 + 下载按钮）的验收截图

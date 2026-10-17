@@ -186,8 +186,14 @@ window.__e2e = { report: null, liked: liked, calls: calls, addToCalls: addToCall
 })();
 </script>
 
-<!-- 被测脚本 -->
-<script src="/netease-music-lite.user.js"></script>
+<!-- 被测脚本：?build=full 时换成 tools/build-full.cjs 生成的那份（需先 node tools/build-full.cjs） -->
+<script>
+(function () {
+  var full = new URLSearchParams(location.search).get('build') === 'full';
+  var src = full ? '/netease-music-full.user.js' : '/netease-music-lite.user.js';
+  document.write('<script src="' + src + '"><\/script>');
+})();
+</script>
 
 <script>
 /* ═══════════ 驱动：像用户那样点 ═══════════ */
@@ -321,6 +327,23 @@ const text = (el) => (el ? String(el.textContent || '').trim() : null);
     };
   }
 
+  /* ⑨ 构建：lite 版没有「全功能版」标、也没有下载按钮；full 版两个都要有。
+   *    （两者由同一个构建决定，所以这里断言的是「标和按钮必须一致」。） */
+  {
+    const badge = $('#nm3-full');
+    const dlBtns = $$('[data-act="dl-current"]').length;
+    const hasBadge = !!badge;
+    report.steps.build = {
+      badge: hasBadge,
+      badgeText: hasBadge ? badge.textContent : '',
+      downloadButtons: dlBtns,
+      consistent: hasBadge === (dlBtns > 0)
+    };
+    if (!report.steps.build.consistent) {
+      report.errors.push('构建标记与下载按钮不一致：badge=' + hasBadge + ' dl=' + dlBtns);
+    }
+  }
+
   report.errors = report.errors;
   document.title = 'E2E ' + (report.errors.length ? 'ERRORS' : 'OK');
   const pre = document.createElement('pre');
@@ -342,7 +365,10 @@ const text = (el) => (el ? String(el.textContent || '').trim() : null);
     '\ncoverFallback changed=' + (report.steps.coverFallback || {}).changed +
     '\nskin cycle=' + JSON.stringify((report.steps.skin || {}).cycle) +
     ' accents=' + JSON.stringify((report.steps.skin || {}).accents) +
-    ' chip=' + (report.steps.skin || {}).chip;
+    ' chip=' + (report.steps.skin || {}).chip +
+    '\nbuild badge=' + (report.steps.build || {}).badge +
+    ' text=' + (report.steps.build || {}).badgeText +
+    ' dlBtns=' + (report.steps.build || {}).downloadButtons;
   document.body.appendChild(pre);
   const full = document.createElement('pre');
   full.id = 'nm3-e2e-full';

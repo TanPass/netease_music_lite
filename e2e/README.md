@@ -48,6 +48,21 @@ node e2e/server.cjs                      # → http://127.0.0.1:8791/mock.html
 7. 手动把一张封面写成不存在的地址 → 断言 `error` 兜底把它换掉；
 8. 连点三下页头皮肤按钮 → 断言 `<html>` 的 `data-nm3-skin` 依次是
    `ink → rhine-day → rhine-night → ink`，**并且**从 CSS 里真取到的 `--nm3-accent` 也跟着变
-   （`#4EA4EF → #C2571F → #E4692A → #4EA4EF`）—— 只改属性不改样式的话这一步会红。
+   （`#4EA4EF → #C2571F → #E4692A → #4EA4EF`）—— 只改属性不改样式的话这一步会红；
+9. 构建核对 → 页头有没有「全功能版」标、控件栏有没有下载按钮，**两者必须同时成立**
+   （lite 版 `badge=false dlBtns=0`；`node tools/build-full.cjs` 之后用 `?build=full` 打开是
+   `badge=true text=全功能版 dlBtns=1`）。一边有一边没有会记成 jsError。
+
+## 只想看「全功能版」
+
+```bash
+node tools/build-full.cjs      # 生成 netease-music-full.user.js（不进仓库）
+node e2e/server.cjs
+# 浏览器打开 http://127.0.0.1:8791/mock.html?build=full
+```
+
+`?build=full` 会把被测脚本换成生成物（`server.cjs` 正好也把上一级目录用 http:// 提供出来）。
+它和 `?skin=` 可以叠着用：`?build=full&skin=rhine-day` 就是「全功能版 + 晨雾」——`full-build.png`
+那张验收截图就是这么拍的。
 
 改脚本之后重跑一次，报告里任何一步不对都看得见。

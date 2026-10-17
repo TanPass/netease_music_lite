@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         网易云音乐 · 精简版（听歌 / 搜索 / 我的音乐）
 // @namespace    https://music.163.com/
-// @version      4.11.0
+// @version      4.12.0
 // @description  把网易云音乐网页版重做成深蓝夜色的三页签播放器：听歌（大封面 + 歌词上方的完整播放控制台：上一首/播放暂停/下一首、进度条、播放模式、音量、可展开点歌的播放列表、收藏、分享 + 可点赞的评论 + 时间轴歌词（翻译 / 罗马音 / 逐字） + 音质选择 + 专辑/歌手点进去看详情）、搜索（歌曲/歌手/专辑/歌单）、我的音乐。站点导航与内容区移除，底部播放条整体让位。歌手页可看**全部歌曲**（可翻页）与**专辑**；收藏走多条官方口径并在服务端核实状态。**自带三套皮肤**（原皮 · 深蓝夜色 / 莱茵生命 · 晨雾 / 莱茵生命 · 月影），页头按钮循环切换。**仅供个人学习研究、非商业用途**：涉及「伪装客户端姿态取流」「下载」的功能默认关闭，需自行在 CONFIG 里打开，详见脚本顶部免责声明。
 // @author       TanPass
 // @match        https://music.163.com/*
@@ -272,7 +272,13 @@
     //    歌词本身也是受著作权保护的作品，单独作为一个开关。
     DOWNLOAD_LRC: false,
 
-    DOWNLOAD_SUBDIR: ''        // 下载目录：选定「音乐」文件夹后再往里放的子文件夹名（空=直接放音乐文件夹）
+    DOWNLOAD_SUBDIR: '',       // 下载目录：选定「音乐」文件夹后再往里放的子文件夹名（空=直接放音乐文件夹）
+
+    /* ④ 全功能版标记：**不要手改**。
+     *    tools/build-full.cjs 生成的那份（netease-music-full.user.js）会把它设成 true，
+     *    作用是页头挂一个「全功能版」标、启动时提示已开了哪几个开关。
+     *    公开仓库里这份永远是 false —— 所以你看不到也打不开。 */
+    FULL_BUILD: false
   };
 
   const PALETTE = {
@@ -890,6 +896,16 @@
       width: 18px; height: 18px; border-radius: 50%; display: block;
       background: radial-gradient(circle at 32% 30%, var(--nm3-accent), var(--nm3-deep) 74%);
       box-shadow: 0 0 14px rgba(var(--nm3-accent-rgb),.5);
+    }
+    /* 全功能版标记：只有 tools/build-full.cjs 生成的构建才会出现这个元素 */
+    #nm3-bar .nm3-full {
+      display: inline-flex; align-items: center; flex: 0 0 auto;
+      height: 20px; padding: 0 8px; margin-left: 1px;
+      font-size: 11px; font-style: normal; font-weight: 600; letter-spacing: .06em;
+      color: var(--nm3-accent);
+      background: rgba(var(--nm3-accent-rgb),.12);
+      border: 1px solid rgba(var(--nm3-accent-rgb),.45);
+      border-radius: 999px; white-space: nowrap; cursor: help;
     }
     #nm3-bar .nm3-tabs { display: flex; align-items: center; height: 100%; flex: 0 0 auto; }
     #nm3-bar .nm3-tab {
@@ -1893,6 +1909,7 @@
   html[data-nm3-skin^="rhine"] .nm3-q-btn,
   html[data-nm3-skin^="rhine"] .nm3-tag,
   html[data-nm3-skin^="rhine"] .nm3-bio,
+  html[data-nm3-skin^="rhine"] #nm3-bar .nm3-full,
   html[data-nm3-skin^="rhine"] .nm3-cover-nick {
     border-radius: 2px;
   }
@@ -2185,12 +2202,29 @@
 
   /* ═══════════════════════════ 页头 ═══════════════════════════ */
 
+  /**
+   * 全功能版标记（只由 tools/build-full.cjs 生成的构建打开，公开版恒为空）。
+   * 页头那个小标就是为了让你一眼认出「现在装的是哪一份」——
+   * 因为它比公开版多了三个默认关闭的敏感功能，出问题时要能分清是哪份的行为。
+   */
+  function fullBadge() {
+    if (CONFIG.FULL_BUILD !== true) return '';
+    return '<em class="nm3-full" id="nm3-full" title="全功能版：客户端姿态取流 / 下载 / 附带 .lrc 均已开启，仅供本机个人使用">全功能版</em>';
+  }
+
+  /** 全功能版启动时说清楚开了什么（公开版什么都不说，避免刷屏） */
+  function fullNotice() {
+    if (CONFIG.FULL_BUILD !== true) return;
+    toast('全功能版：客户端姿态取流 / 下载 / 附带 .lrc 已开启；仅供本机个人听歌，别再分发', 7000);
+  }
+
   function buildBar() {
     if (barEl) return;
     barEl = document.createElement('div');
     barEl.id = 'nm3-bar';
     barEl.innerHTML =
       '<span class="nm3-brand"><i></i><span>网易云音乐</span></span>' +
+      fullBadge() +
       '<nav class="nm3-tabs">' +
         TABS.map((t) => '<a class="nm3-tab" data-tab="' + t.key + '">' + esc(t.label) + '</a>').join('') +
       '</nav>' +
@@ -5901,6 +5935,7 @@
         window.addEventListener('scroll', layout, true);
 
         setInterval(tick, CONFIG.TICK);
+        fullNotice();          // 全功能版才提示；公开版是空函数，什么都不做
         log('已启动：听歌 / 搜索 / 我的音乐（底栏功能已搬到歌词上方）');
       } catch (e) {
         // 启动阶段出岔子别静默：至少让控制台说清楚，也别把 tick 留在半路

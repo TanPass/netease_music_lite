@@ -1,0 +1,8 @@
+# 全功能版是**本机生成物**，不进公开仓库
+# 生成：node tools/build-full.cjs
+# 理由见 README「全功能版」一节：它打开了下载 / 客户端姿态取流，
+# 公开分发这件事由使用者自行判断，仓库里只保留默认关闭开关的 lite 版。
+netease-music-full.user.js
+
+# e2e 跑完的产物
+e2e/report.json
