@@ -372,6 +372,9 @@ function buildLyricApi() {
   function buildLikeApi(opts) {
     const o = opts || {};
     const server = { liked: new Set(o.liked || []) };
+    const initialLiked = new Set(o.liked || []);   // o.staleTimes：模拟 CDN 陈旧快照
+    let wrote = false;
+    let staleReads = 0;
     const block = slice('  async function ensureLikedSet(force) {', '  function openArtist(id) {');
     const prelude = `
       let likedSet = null, likedFor = null, likedBusy = false, likeBusy = false;
@@ -418,15 +421,21 @@ function buildLyricApi() {
       params.forEach((v, k) => { asObj[k] = v; });
       fetched.push({ path: p, body: params });
       const reply = o.reply ? o.reply(p, asObj, server) : { code: 200 };
+      wrote = true;
       return { ok: true, status: 200, json: async () => reply };
     };
 
+    const apiGetCalls = [];
     const apiGetStub = async (p, params) => {
+      apiGetCalls.push(p);
       if (p === '/api/user/playlist') {
         return o.noPlaylist ? { playlist: [] } : { playlist: [{ id: 501, specialType: 5 }] };
       }
       if (p === '/api/v6/playlist/detail') {
-        const ids = Array.from(server.liked).map((id) => ({ id: Number(id) }));
+        // o.staleTimes：写完之后的前 N 次详情读还是旧快照，模拟歌单详情的 CDN 延迟
+        const stale = o.staleTimes && wrote && staleReads < o.staleTimes;
+        if (stale) staleReads++;
+        const ids = Array.from(stale ? initialLiked : server.liked).map((id) => ({ id: Number(id) }));
         if (o.trackIdsBroken) {
           if (params.n === 1) return { playlist: {} };
           return { playlist: { tracks: ids.map((x) => ({ id: x.id, name: 'x' })) } };
@@ -446,7 +455,7 @@ function buildLyricApi() {
       () => o.spoof === true,
       URLSearchParams
     );
-    return { api, fetched, toasts, warns, server, subscribeCalls, btn };
+    return { api, fetched, toasts, warns, server, subscribeCalls, btn, apiGetCalls };
   }
 
   /* ── 8. 评论点赞：路径、参数、type 的语义 ── */
@@ -639,7 +648,7 @@ function buildLyricApi() {
     assert.ok(/登录/.test(nologin.toasts[nologin.toasts.length - 1]));
     assert.strictEqual(nologin.fetched.length, 0, '未登录时不该发写请求');
 
-    // g) 已收藏的歌点一下 = 取消收藏
+    // g) 已收藏的歌点一下 = 取消收藏（新顺序下先走 playlist-manipulate，op=del）
     const unlike = buildLikeApi({
       liked: ['999'],
       reply: (p, body, server) => {
@@ -649,10 +658,64 @@ function buildLyricApi() {
       }
     });
     await unlike.api.doLike();
-    assert.strictEqual(unlike.fetched[0].body.get('like'), 'false', '已经收藏过的应当是取消');
+    const delCall = unlike.fetched.find((c) => c.body.get('op') === 'del' || c.body.get('like') === 'false');
+    assert.ok(delCall, '已经收藏过的应当是取消（op=del 或 like=false）');
     assert.ok(!unlike.server.liked.has('999'));
     assert.ok(/已取消收藏/.test(unlike.toasts[unlike.toasts.length - 1]));
     console.log('ok 11 收藏全流程：多口径 → 站点入口 → 状态校验 → 说人话');
+  }
+
+  /* ── 11b. ★ 三个「点了红心却没反应」的真根因，逐个钉住 ── */
+  {
+    // a) 写成功、但歌单详情被 CDN 缓存了旧快照：必须重试到看见变化，不能一次判失败
+    const stale = buildLikeApi({
+      staleTimes: 2,
+      reply: (p, body, server) => {
+        if (p === '/api/v1/playlist/manipulate/tracks') {
+          if (body.op !== 'del') JSON.parse(body.trackIds).forEach((id) => server.liked.add(String(id)));
+          return { code: 200 };
+        }
+        return { code: -460, msg: '风控' };
+      }
+    });
+    await stale.api.doLike();
+    assert.ok(stale.server.liked.has('999'), '写请求应当真的落库');
+    const staleToast = stale.toasts[stale.toasts.length - 1];
+    assert.ok(/已收藏/.test(staleToast), '读了一次旧快照就判失败会让成功也报失败：' + staleToast);
+    assert.strictEqual(stale.fetched.length, 1, '第一条口径其实成功了，不该再去试后面几条');
+
+    // b) 服务端回 200、但收藏状态读不回来：只能如实说「已提交」，不能报「已收藏」
+    const blind = buildLikeApi({ noPlaylist: true, reply: () => ({ code: 200 }) });
+    await blind.api.doLike();
+    const blindToast = blind.toasts[blind.toasts.length - 1];
+    assert.ok(!/已收藏/.test(blindToast), '状态没核上时不能报已收藏：' + blindToast);
+    assert.ok(/已提交/.test(blindToast), '要如实说已提交、请刷新确认：' + blindToast);
+
+    // c) 并发读「我喜欢的音乐」：后到的调用必须等到结果，不能拿 null 就开工
+    const conc = buildLikeApi({ liked: ['7'] });
+    const [r1, r2] = await Promise.all([conc.api.ensureLikedSet(true), conc.api.ensureLikedSet(true)]);
+    assert.strictEqual(r1, true);
+    assert.strictEqual(r2, true);
+    assert.strictEqual(conc.api.isLiked(7), true);
+    assert.strictEqual(conc.apiGetCalls.filter((p) => p === '/api/user/playlist').length, 1,
+      '并发读取应当合并成一次，而不是各读一份半截状态');
+
+    console.log('ok 11b 收藏：CDN 旧快照重试 / 200 但状态读不回 / 并发读合并');
+  }
+
+  /* ── 11c. 收藏：服务端回 502（站点自己代码里的「歌曲已存在」）= 本来就在里面，算成功 ── */
+  {
+    const dup = buildLikeApi({
+      reply: (p, body) => {
+        if (p === '/api/v1/playlist/manipulate/tracks' && body.op === 'add') return { code: 502, msg: '歌曲已存在！' };
+        return { code: 301, msg: '需要登录' };
+      }
+    });
+    await dup.api.doLike();
+    const t = dup.toasts[dup.toasts.length - 1];
+    assert.ok(/已收藏/.test(t), '本来就在「我喜欢的音乐」里，不该报失败：' + t);
+    assert.strictEqual(dup.fetched.length, 1, '502 已存在就是终点，不必再试后面的旧接口');
+    console.log('ok 11c 收藏：playlist 回 502「歌曲已存在」按已在收藏处理');
   }
 
   /* ── 12. 收藏集合：trackIds 优先，缺了就退 tracks ── */

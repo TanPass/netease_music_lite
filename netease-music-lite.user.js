@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         网易云音乐 · 精简版（听歌 / 搜索 / 我的音乐）
 // @namespace    https://music.163.com/
-// @version      4.9.0
-// @description  把网易云音乐网页版重做成深蓝夜色的三页签播放器：听歌（大封面 + 歌词上方的完整播放控制台：上一首/播放暂停/下一首、进度条、播放模式、音量、可展开点歌的播放列表、收藏、分享 + 可点赞的评论 + 时间轴歌词（翻译 / 罗马音 / 逐字） + 音质选择 + 专辑/歌手点进去看详情）、搜索（歌曲/歌手/专辑/歌单）、我的音乐。站点导航与内容区移除，底部播放条整体让位。歌手页可看**全部歌曲**（可翻页）与**专辑**；收藏走多条官方口径并在服务端核实状态。**仅供个人学习研究、非商业用途**：涉及「伪装客户端姿态取流」「下载」的功能默认关闭，需自行在 CONFIG 里打开，详见脚本顶部免责声明。
+// @version      4.11.0
+// @description  把网易云音乐网页版重做成深蓝夜色的三页签播放器：听歌（大封面 + 歌词上方的完整播放控制台：上一首/播放暂停/下一首、进度条、播放模式、音量、可展开点歌的播放列表、收藏、分享 + 可点赞的评论 + 时间轴歌词（翻译 / 罗马音 / 逐字） + 音质选择 + 专辑/歌手点进去看详情）、搜索（歌曲/歌手/专辑/歌单）、我的音乐。站点导航与内容区移除，底部播放条整体让位。歌手页可看**全部歌曲**（可翻页）与**专辑**；收藏走多条官方口径并在服务端核实状态。**自带三套皮肤**（原皮 · 深蓝夜色 / 莱茵生命 · 晨雾 / 莱茵生命 · 月影），页头按钮循环切换。**仅供个人学习研究、非商业用途**：涉及「伪装客户端姿态取流」「下载」的功能默认关闭，需自行在 CONFIG 里打开，详见脚本顶部免责声明。
 // @author       TanPass
 // @match        https://music.163.com/*
 // @match        https://www.music.163.com/*
@@ -287,6 +287,76 @@
 
   const INK = '#0B0E19'; // 亮蓝底上的深色文字
 
+  /** '#1A2B3C' -> '26,43,60'：给 --nm3-*-rgb 通道量用（皮肤只换这组数） */
+  function rgbTriplet(hex) {
+    const h = String(hex).replace('#', '');
+    const full = h.length === 3 ? h[0] + h[0] + h[1] + h[1] + h[2] + h[2] : h;
+    const n = parseInt(full, 16);
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255].join(',');
+  }
+
+  /* ═══════════════════════════ 皮肤 ═══════════════════════════
+   * 三套皮肤共用同一份布局，区别只在 SKIN_CSS 里那几组变量与装饰：
+   *   ink        原皮（深蓝夜色，默认，不设属性）
+   *   rhine-day  莱茵生命 · 晨雾（暖白纸 + 黑墨 + 信号橙）
+   *   rhine-night 莱茵生命 · 月影（深蓝夜 + 冷白 + 信号橙）
+   * 切换只改 <html data-nm3-skin>，不重建 DOM，正在放的歌不中断。
+   */
+  const SKIN_KEY = 'nm3.skin';
+  const SKINS = [
+    { id: 'ink', chip: '原皮', name: '原皮 · 深蓝夜色' },
+    { id: 'rhine-day', chip: '晨雾', name: '莱茵生命 · 晨雾' },
+    { id: 'rhine-night', chip: '月影', name: '莱茵生命 · 月影' }
+  ];
+
+  let skinId = (function () {
+    try {
+      const v = localStorage.getItem(SKIN_KEY);
+      if (v && SKINS.some((s) => s.id === v)) return v;
+    } catch (e) { /* 无痕模式读不到就用默认 */ }
+    return SKINS[0].id;
+  })();
+
+  function skinOf(id) {
+    for (const s of SKINS) if (s.id === id) return s;
+    return SKINS[0];
+  }
+
+  /** 把皮肤落到 <html> 上并记住。document-start 时文档可能还没 <html>，等一帧。 */
+  function applySkin(id) {
+    if (id) skinId = id;
+    const put = () => {
+      const root = document.documentElement;
+      if (!root) return false;
+      if (skinId === SKINS[0].id) root.removeAttribute('data-nm3-skin');
+      else root.setAttribute('data-nm3-skin', skinId);
+      return true;
+    };
+    if (!put()) {
+      if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', put, { once: true });
+      else requestAnimationFrame(put);
+    }
+    try { localStorage.setItem(SKIN_KEY, skinId); } catch (e) { /* 存不下就只管本次会话 */ }
+    renderSkinChip();
+  }
+
+  /** 页头那颗按钮上的字跟着皮肤走（按钮还没建时静默跳过） */
+  function renderSkinChip() {
+    const btn = document.getElementById('nm3-skin');
+    if (!btn) return;
+    const s = skinOf(skinId);
+    const em = btn.querySelector('em');
+    if (em) em.textContent = s.chip;
+    btn.setAttribute('title', '皮肤：' + s.name + '（点一下换下一套）');
+  }
+
+  function nextSkin() {
+    const i = SKINS.findIndex((s) => s.id === skinId);
+    const s = SKINS[(i + 1) % SKINS.length];
+    applySkin(s.id);
+    if (typeof toast === 'function') toast('皮肤：' + s.name, 1600);
+  }
+
   const PREFIX = '%c[云音乐·精简版]';
   const STYLE = 'color:' + PALETTE.accent + ';font-weight:bold';
   const log = (...a) => console.log(PREFIX, STYLE, ...a);
@@ -562,6 +632,11 @@
   /* ═══════════════════════════ 图标 ═══════════════════════════ */
 
   const SVG = {
+    /* 皮肤按钮：六边形档案格 + 中心核（莱茵生命的档案盒符号，三套皮肤通用） */
+    skin: (s, c) =>
+      '<svg viewBox="0 0 16 16" width="' + s + '" height="' + s + '" fill="none">' +
+      '<path d="M8 1.7 13.4 4.8v6.4L8 14.3 2.6 11.2V4.8z" stroke="' + c +
+      '" stroke-width="1.25" stroke-linejoin="round"/><circle cx="8" cy="8" r="1.7" fill="' + c + '"/></svg>',
     heart: (s, c) =>
       '<svg viewBox="0 0 1024 1024" width="' + s + '" height="' + s + '" fill="' + c + '">' +
       '<path d="M512 896C288 736 128 597 128 405 128 277 226 179 354 179c63 0 123 27 158 71 35-44 95-71 158-71 128 0 226 98 226 226 0 192-160 331-384 491z"/></svg>',
@@ -632,12 +707,40 @@
       --nm3-accent: ${PALETTE.accent};
       --nm3-fg:     ${PALETTE.fg};
       --nm3-warm:   ${PALETTE.warm};
-      --nm3-fg2:    rgba(218,226,237,.62);
-      --nm3-fg3:    rgba(218,226,237,.36);
-      --nm3-line:   rgba(218,226,237,.09);
-      --nm3-hover:  rgba(78,164,239,.10);
-      --nm3-sel:    rgba(78,164,239,.15);
-      --nm3-glow:   0 0 12px rgba(78,164,239,.55);
+      --nm3-ink:    ${INK};
+
+      /* ★ 皮肤用「通道量」：整套界面里所有半透明色都写成
+       *   rgba(var(--nm3-xxx-rgb), alpha)，换皮肤只需要换下面这组三元组和
+       *   几处整色，不用去改一百多条规则。原皮的值由 PALETTE 推导，观感不变。 */
+      --nm3-bg-rgb:     ${rgbTriplet(PALETTE.bg)};
+      --nm3-bg2-rgb:    ${rgbTriplet(PALETTE.bg2)};
+      --nm3-card-rgb:   ${rgbTriplet(PALETTE.card)};
+      --nm3-deep-rgb:   ${rgbTriplet(PALETTE.deep)};
+      --nm3-accent-rgb: ${rgbTriplet(PALETTE.accent)};
+      --nm3-fg-rgb:     ${rgbTriplet(PALETTE.fg)};
+      --nm3-warm-rgb:   ${rgbTriplet(PALETTE.warm)};
+      --nm3-ink-rgb:    ${rgbTriplet(INK)};
+      --nm3-channel-rgb: ${rgbTriplet(INK)};
+      --nm3-shadow-rgb: 0,0,0;
+      --nm3-white-rgb:  255,255,255;
+
+      /* 皮肤专属的四处整色：进度条高光 / 歌单头图渐变两端 / 顶栏渐变 / 旋钮 */
+      --nm3-hi:       #9BD6FF;
+      --nm3-hero-a:   #1D2440;
+      --nm3-hero-b:   #191B2C;
+      --nm3-bar-grad: #16182A;
+      --nm3-knob:     #FFFFFF;
+      /* 语义色：accent2 = 橙色渐变的另一端；solid/solid-fg = 「实心小块」及其文字。
+       * 浅色皮肤不能让 solid 用 --nm3-deep（深底 + 深字看不见），所以单列出来。 */
+      --nm3-accent2:  ${PALETTE.deep};
+      --nm3-solid:    ${PALETTE.deep};
+      --nm3-solid-fg: ${PALETTE.fg};
+      --nm3-fg2:    rgba(var(--nm3-fg-rgb),.62);
+      --nm3-fg3:    rgba(var(--nm3-fg-rgb),.36);
+      --nm3-line:   rgba(var(--nm3-fg-rgb),.09);
+      --nm3-hover:  rgba(var(--nm3-accent-rgb),.10);
+      --nm3-sel:    rgba(var(--nm3-accent-rgb),.15);
+      --nm3-glow:   0 0 12px rgba(var(--nm3-accent-rgb),.55);
     }
 
     /* ── 站点原生的顶栏和内容区整个让位 ───────────────────────── */
@@ -688,9 +791,9 @@
       width: 570px !important; height: 460px !important;
       max-height: calc(100vh - 200px) !important;
       z-index: 1005 !important;
-      background: ${PALETTE.card} !important; border: 1px solid rgba(78,164,239,.28);
+      background: var(--nm3-card) !important; border: 1px solid rgba(var(--nm3-accent-rgb),.28);
       border-radius: 14px; overflow: hidden;
-      box-shadow: 0 26px 64px rgba(0,0,0,.62);
+      box-shadow: 0 26px 64px rgba(var(--nm3-shadow-rgb),.62);
     }
     /* 头部：站点是按 976px 宽绝对定位摆的，这里改成 flex，免得挤成一团 */
     .m-playbar #g_playlist .listhd {
@@ -739,9 +842,9 @@
     }
     .m-playbar #g_playlist .listbdc::-webkit-scrollbar { width: 8px; }
     .m-playbar #g_playlist .listbdc::-webkit-scrollbar-thumb {
-      background: rgba(218,226,237,.16); border-radius: 4px;
+      background: rgba(var(--nm3-fg-rgb),.16); border-radius: 4px;
     }
-    .m-playbar #g_playlist .listbdc::-webkit-scrollbar-thumb:hover { background: rgba(78,164,239,.5); }
+    .m-playbar #g_playlist .listbdc::-webkit-scrollbar-thumb:hover { background: rgba(var(--nm3-accent-rgb),.5); }
     .m-playbar #g_playlist .listlyric,
     .m-playbar #g_playlist .imgbg,
     .m-playbar #g_playlist .msk,
@@ -753,8 +856,8 @@
     /* 行：列宽/行高都按站点自己的来，只把颜色拉进主题。
        注意 #g_playlist 本身就是那块 .list，所以选择器别再往后接 .list */
     .m-playbar #g_playlist ul { color: var(--nm3-fg2) !important; }
-    .m-playbar #g_playlist li:hover { background-color: rgba(78,164,239,.10) !important; }
-    .m-playbar #g_playlist li.z-sel { background-color: rgba(78,164,239,.16) !important; }
+    .m-playbar #g_playlist li:hover { background-color: rgba(var(--nm3-accent-rgb),.10) !important; }
+    .m-playbar #g_playlist li.z-sel { background-color: rgba(var(--nm3-accent-rgb),.16) !important; }
     .m-playbar #g_playlist .col-5 { color: var(--nm3-fg3) !important; }
     .m-playbar #g_playlist .nocnt { color: var(--nm3-fg3); }
     .m-playbar #g_playlist .nocnt a { color: var(--nm3-accent) !important; }
@@ -771,9 +874,9 @@
       height: ${CONFIG.BAR_H}px;
       display: flex; align-items: center; gap: 22px;
       box-sizing: border-box; padding: 0 26px;
-      background: linear-gradient(180deg, #16182A 0%, ${PALETTE.bg} 100%);
-      border-bottom: 1px solid rgba(78,164,239,.16);
-      box-shadow: 0 1px 20px rgba(0,0,0,.35);
+      background: linear-gradient(180deg, var(--nm3-bar-grad) 0%, var(--nm3-bg) 100%);
+      border-bottom: 1px solid rgba(var(--nm3-accent-rgb),.16);
+      box-shadow: 0 1px 20px rgba(var(--nm3-shadow-rgb),.35);
       color: var(--nm3-fg);
       font: 14px/1 -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "Segoe UI", Arial, sans-serif;
       -webkit-font-smoothing: antialiased;
@@ -785,8 +888,8 @@
     }
     #nm3-bar .nm3-brand i {
       width: 18px; height: 18px; border-radius: 50%; display: block;
-      background: radial-gradient(circle at 32% 30%, ${PALETTE.accent}, ${PALETTE.deep} 74%);
-      box-shadow: 0 0 14px rgba(78,164,239,.5);
+      background: radial-gradient(circle at 32% 30%, var(--nm3-accent), var(--nm3-deep) 74%);
+      box-shadow: 0 0 14px rgba(var(--nm3-accent-rgb),.5);
     }
     #nm3-bar .nm3-tabs { display: flex; align-items: center; height: 100%; flex: 0 0 auto; }
     #nm3-bar .nm3-tab {
@@ -810,14 +913,14 @@
       width: 300px; height: 36px; flex: 0 0 auto;
       box-sizing: border-box; padding: 0 6px 0 13px;
       border-radius: 18px;
-      background: rgba(218,226,237,.06);
-      border: 1px solid rgba(218,226,237,.10);
+      background: rgba(var(--nm3-fg-rgb),.06);
+      border: 1px solid rgba(var(--nm3-fg-rgb),.10);
       transition: border-color .18s, background .18s, box-shadow .18s;
     }
     #nm3-bar .nm3-search:focus-within {
-      border-color: rgba(78,164,239,.6);
-      background: rgba(78,164,239,.09);
-      box-shadow: 0 0 0 3px rgba(78,164,239,.13);
+      border-color: rgba(var(--nm3-accent-rgb),.6);
+      background: rgba(var(--nm3-accent-rgb),.09);
+      box-shadow: 0 0 0 3px rgba(var(--nm3-accent-rgb),.13);
     }
     #nm3-bar .nm3-search svg { flex: 0 0 auto; color: var(--nm3-fg3); }
     #nm3-bar .nm3-search input {
@@ -829,21 +932,21 @@
     #nm3-bar .nm3-search button {
       flex: 0 0 auto; height: 26px; padding: 0 14px;
       border-radius: 13px; border: 0; cursor: pointer;
-      background: var(--nm3-deep); color: var(--nm3-fg);
+      background: var(--nm3-solid); color: var(--nm3-solid-fg);
       font-size: 12.5px; font-family: inherit; transition: all .18s;
     }
-    #nm3-bar .nm3-search button:hover { background: var(--nm3-accent); color: ${INK}; }
+    #nm3-bar .nm3-search button:hover { background: var(--nm3-accent); color: var(--nm3-ink); }
 
     /* 账号 */
     #nm3-bar .nm3-user { position: relative; flex: 0 0 auto; }
     #nm3-bar .nm3-user-chip {
       display: flex; align-items: center; gap: 9px; height: 36px;
       padding: 0 13px 0 4px; border-radius: 18px; cursor: pointer;
-      background: rgba(218,226,237,.06);
-      border: 1px solid rgba(218,226,237,.10);
+      background: rgba(var(--nm3-fg-rgb),.06);
+      border: 1px solid rgba(var(--nm3-fg-rgb),.10);
       transition: background .18s, border-color .18s;
     }
-    #nm3-bar .nm3-user-chip:hover { background: rgba(78,164,239,.13); border-color: rgba(78,164,239,.4); }
+    #nm3-bar .nm3-user-chip:hover { background: rgba(var(--nm3-accent-rgb),.13); border-color: rgba(var(--nm3-accent-rgb),.4); }
     #nm3-bar .nm3-user-chip img {
       width: 28px; height: 28px; border-radius: 50%; object-fit: cover;
       background: var(--nm3-deep); flex: 0 0 auto; display: block;
@@ -855,16 +958,16 @@
     #nm3-bar .nm3-user-go {
       display: flex; align-items: center; height: 34px; padding: 0 18px;
       border-radius: 17px; cursor: pointer; border: 0;
-      background: linear-gradient(135deg, ${PALETTE.accent}, ${PALETTE.deep});
-      color: ${INK}; font-size: 13px; font-weight: 600; font-family: inherit;
+      background: linear-gradient(135deg, var(--nm3-accent), var(--nm3-accent2));
+      color: var(--nm3-ink); font-size: 13px; font-weight: 600; font-family: inherit;
       transition: filter .18s;
     }
     #nm3-bar .nm3-user-go:hover { filter: brightness(1.12); }
     #nm3-bar .nm3-user-menu {
       position: absolute; right: 0; top: calc(100% + 10px); min-width: 140px;
       padding: 6px; display: none; border-radius: 11px;
-      background: ${PALETTE.card}; border: 1px solid var(--nm3-line);
-      box-shadow: 0 16px 40px rgba(0,0,0,.55);
+      background: var(--nm3-card); border: 1px solid var(--nm3-line);
+      box-shadow: 0 16px 40px rgba(var(--nm3-shadow-rgb),.55);
     }
     #nm3-bar .nm3-user.nm3-open .nm3-user-menu { display: block; }
     #nm3-bar .nm3-user-menu a {
@@ -899,38 +1002,38 @@
     .nm3-view.nm3-hide { display: none !important; }
     .nm3-scroll { position: relative; z-index: 1; flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; }
     .nm3-scroll::-webkit-scrollbar { width: 9px; }
-    .nm3-scroll::-webkit-scrollbar-thumb { background: rgba(218,226,237,.14); border-radius: 5px; }
-    .nm3-scroll::-webkit-scrollbar-thumb:hover { background: rgba(78,164,239,.45); }
+    .nm3-scroll::-webkit-scrollbar-thumb { background: rgba(var(--nm3-fg-rgb),.14); border-radius: 5px; }
+    .nm3-scroll::-webkit-scrollbar-thumb:hover { background: rgba(var(--nm3-accent-rgb),.45); }
 
     /* ── 通用控件 ──────────────────────────────────────────────── */
     .nm3-btn {
       display: inline-flex; align-items: center; justify-content: center; gap: 7px;
       height: 34px; padding: 0 20px; border-radius: 17px;
-      border: 1px solid rgba(218,226,237,.16); background: rgba(218,226,237,.05);
+      border: 1px solid rgba(var(--nm3-fg-rgb),.16); background: rgba(var(--nm3-fg-rgb),.05);
       color: var(--nm3-fg); font-size: 13px; font-family: inherit;
       cursor: pointer; white-space: nowrap; transition: all .18s;
     }
-    .nm3-btn:hover { border-color: rgba(78,164,239,.6); color: var(--nm3-accent); background: var(--nm3-hover); }
+    .nm3-btn:hover { border-color: rgba(var(--nm3-accent-rgb),.6); color: var(--nm3-accent); background: var(--nm3-hover); }
     .nm3-btn.nm3-primary {
-      background: linear-gradient(135deg, ${PALETTE.accent}, ${PALETTE.deep});
-      border-color: transparent; color: ${INK}; font-weight: 600;
-      box-shadow: 0 6px 20px rgba(78,164,239,.28);
+      background: linear-gradient(135deg, var(--nm3-accent), var(--nm3-accent2));
+      border-color: transparent; color: var(--nm3-ink); font-weight: 600;
+      box-shadow: 0 6px 20px rgba(var(--nm3-accent-rgb),.28);
     }
-    .nm3-btn.nm3-primary:hover { filter: brightness(1.1); color: ${INK}; }
+    .nm3-btn.nm3-primary:hover { filter: brightness(1.1); color: var(--nm3-ink); }
     .nm3-btn[disabled] { opacity: .45; cursor: not-allowed; }
     .nm3-btn svg { flex: 0 0 auto; }
 
     .nm3-back {
       display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto;
       height: 30px; padding: 0 15px 0 11px; border-radius: 15px;
-      border: 1px solid rgba(218,226,237,.14); background: rgba(218,226,237,.05);
+      border: 1px solid rgba(var(--nm3-fg-rgb),.14); background: rgba(var(--nm3-fg-rgb),.05);
       color: var(--nm3-fg2); font-size: 12.5px; font-family: inherit;
       cursor: pointer; transition: all .18s;
     }
-    .nm3-back:hover { border-color: rgba(78,164,239,.6); color: var(--nm3-accent); }
+    .nm3-back:hover { border-color: rgba(var(--nm3-accent-rgb),.6); color: var(--nm3-accent); }
 
     /* 分段控件（歌词/评论、搜索类型） */
-    .nm3-seg { display: inline-flex; gap: 4px; padding: 3px; border-radius: 11px; background: rgba(218,226,237,.06); }
+    .nm3-seg { display: inline-flex; gap: 4px; padding: 3px; border-radius: 11px; background: rgba(var(--nm3-fg-rgb),.06); }
     .nm3-seg a {
       display: inline-flex; align-items: center; gap: 7px;
       height: 28px; padding: 0 16px; border-radius: 8px;
@@ -938,9 +1041,9 @@
       user-select: none; transition: all .18s; white-space: nowrap;
     }
     .nm3-seg a:hover { color: var(--nm3-fg); }
-    .nm3-seg a.nm3-on { background: var(--nm3-deep); color: var(--nm3-fg); font-weight: 500; }
+    .nm3-seg a.nm3-on { background: var(--nm3-solid); color: var(--nm3-solid-fg); font-weight: 500; }
     .nm3-seg a em { font-style: normal; font-size: 11.5px; color: var(--nm3-fg3); }
-    .nm3-seg a.nm3-on em { color: rgba(218,226,237,.7); }
+    .nm3-seg a.nm3-on em { color: rgba(var(--nm3-fg-rgb),.7); }
     /* 歌手详情的「全部歌曲 / 专辑」分段（挂在详情头下面一行） */
     .nm3-dh-tabs { padding: 14px 34px 2px; }
     /* 「加载更多」（歌手全部歌曲 / 专辑分页） */
@@ -957,7 +1060,7 @@
     .nm3-state-sub { font-size: 13px; color: var(--nm3-fg3); max-width: 430px; line-height: 1.9; }
     .nm3-spin {
       width: 28px; height: 28px; border-radius: 50%;
-      border: 2px solid rgba(218,226,237,.12); border-top-color: var(--nm3-accent);
+      border: 2px solid rgba(var(--nm3-fg-rgb),.12); border-top-color: var(--nm3-accent);
       animation: nm3-rot .8s linear infinite;
     }
     @keyframes nm3-rot { to { transform: rotate(360deg); } }
@@ -980,12 +1083,12 @@
     .nm3-t-cover {
       position: relative; width: 42px; height: 42px; flex: 0 0 auto;
       border-radius: 8px; overflow: hidden; background: var(--nm3-card);
-      box-shadow: 0 2px 8px rgba(0,0,0,.35);
+      box-shadow: 0 2px 8px rgba(var(--nm3-shadow-rgb),.35);
     }
     .nm3-t-cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
     .nm3-t-badge {
       position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
-      background: rgba(11,14,25,.68); color: var(--nm3-accent); font-size: 15px;
+      background: rgba(var(--nm3-ink-rgb),.68); color: var(--nm3-accent); font-size: 15px;
       opacity: 0; transition: opacity .18s;
     }
     .nm3-track.nm3-current .nm3-t-badge { opacity: 1; }
@@ -998,8 +1101,8 @@
     }
     .nm3-t-dur { color: var(--nm3-fg3); font-size: 12px; text-align: right; font-variant-numeric: tabular-nums; }
     .nm3-tag { display: inline-block; font-size: 11px; line-height: 18px; padding: 0 7px; border-radius: 9px; white-space: nowrap; }
-    .nm3-tag.nm3-new { color: var(--nm3-accent); background: rgba(78,164,239,.16); }
-    .nm3-tag.nm3-old { color: var(--nm3-warm); background: rgba(147,117,98,.22); }
+    .nm3-tag.nm3-new { color: var(--nm3-accent); background: rgba(var(--nm3-accent-rgb),.16); }
+    .nm3-tag.nm3-old { color: var(--nm3-warm); background: rgba(var(--nm3-warm-rgb),.22); }
 
     /* ══════════════ 听歌页 ══════════════ */
     #nm3-view-listen .nm3-np-bg {
@@ -1018,7 +1121,7 @@
     #nm3-view-listen .nm3-cover {
       width: 296px; height: 296px; border-radius: 16px; overflow: hidden;
       background: var(--nm3-card);
-      box-shadow: 0 22px 56px rgba(0,0,0,.55), 0 0 0 1px rgba(218,226,237,.07);
+      box-shadow: 0 22px 56px rgba(var(--nm3-shadow-rgb),.55), 0 0 0 1px rgba(var(--nm3-fg-rgb),.07);
     }
     #nm3-view-listen .nm3-cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
     #nm3-view-listen .nm3-title {
@@ -1029,7 +1132,7 @@
     #nm3-view-listen .nm3-meta { margin-top: 16px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
     #nm3-view-listen .nm3-chip {
       font-size: 12px; color: var(--nm3-fg2);
-      background: rgba(218,226,237,.07); border-radius: 11px; padding: 3px 12px;
+      background: rgba(var(--nm3-fg-rgb),.07); border-radius: 11px; padding: 3px 12px;
     }
     /* 可点的专辑名 chip：和歌手链接一样是「进详情」的入口 */
     #nm3-view-listen a.nm3-chip-link {
@@ -1054,8 +1157,8 @@
     #nm3-view-listen .nm3-pane { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; }
     #nm3-view-listen .nm3-pane.nm3-hide { display: none !important; }
     #nm3-view-listen .nm3-pane::-webkit-scrollbar { width: 7px; }
-    #nm3-view-listen .nm3-pane::-webkit-scrollbar-thumb { background: rgba(218,226,237,.14); border-radius: 4px; }
-    #nm3-view-listen .nm3-pane::-webkit-scrollbar-thumb:hover { background: rgba(78,164,239,.45); }
+    #nm3-view-listen .nm3-pane::-webkit-scrollbar-thumb { background: rgba(var(--nm3-fg-rgb),.14); border-radius: 4px; }
+    #nm3-view-listen .nm3-pane::-webkit-scrollbar-thumb:hover { background: rgba(var(--nm3-accent-rgb),.45); }
 
     /* ── 进度条：全站唯一一根，摆在歌词上方（听歌页） ───────────
      * 底部播放条那根原装的已经整根藏掉（见本节末尾），所以这里既是显示、
@@ -1087,8 +1190,8 @@
     .nm3-seek-rail {
       position: absolute; left: 0; right: 0; top: 50%; transform: translateY(-50%);
       height: 8px; border-radius: 999px; overflow: hidden;
-      background: linear-gradient(180deg, rgba(11,14,25,.92), rgba(218,226,237,.10));
-      box-shadow: inset 0 1px 2px rgba(0,0,0,.6), 0 0 0 1px rgba(218,226,237,.07);
+      background: linear-gradient(180deg, rgba(var(--nm3-channel-rgb),.92), rgba(var(--nm3-fg-rgb),.10));
+      box-shadow: inset 0 1px 2px rgba(var(--nm3-shadow-rgb),.6), 0 0 0 1px rgba(var(--nm3-fg-rgb),.07);
       transition: height .18s cubic-bezier(.4,0,.2,1);
     }
     .nm3-seek-track:hover .nm3-seek-rail,
@@ -1097,19 +1200,19 @@
     .nm3-seek-buf {
       position: absolute; left: 0; top: 0; bottom: 0; width: 0;
       background: repeating-linear-gradient(115deg,
-        rgba(218,226,237,.22) 0 5px, rgba(218,226,237,.09) 5px 10px);
+        rgba(var(--nm3-fg-rgb),.22) 0 5px, rgba(var(--nm3-fg-rgb),.09) 5px 10px);
       transition: width .3s linear;
     }
     /* 播放进度：深蓝 → 亮蓝渐变 + 末端流动高光 */
     .nm3-seek-fill {
       position: absolute; left: 0; top: 0; bottom: 0; width: 0; border-radius: 999px;
-      background: linear-gradient(90deg, var(--nm3-deep) 0%, var(--nm3-accent) 72%, #9BD6FF 100%);
-      box-shadow: 0 0 14px rgba(78,164,239,.5);
+      background: linear-gradient(90deg, var(--nm3-deep) 0%, var(--nm3-accent) 72%, var(--nm3-hi) 100%);
+      box-shadow: 0 0 14px rgba(var(--nm3-accent-rgb),.5);
       transition: width .12s linear;
     }
     .nm3-seek-fill::after {
       content: ''; position: absolute; right: 0; top: 0; bottom: 0; width: 24px;
-      background: linear-gradient(90deg, rgba(255,255,255,0), rgba(255,255,255,.5));
+      background: linear-gradient(90deg, rgba(var(--nm3-white-rgb),0), rgba(var(--nm3-white-rgb),.5));
     }
     /* 没歌 / 时长还没读到：整根压暗，别装作有进度 */
     .nm3-idle .nm3-seek-fill { box-shadow: none; opacity: .45; }
@@ -1118,23 +1221,23 @@
     /* 圆点 */
     .nm3-seek-knob {
       position: absolute; top: 50%; left: 0; width: 0; height: 0; border-radius: 50%;
-      background: #fff; pointer-events: none; opacity: 0;
-      box-shadow: 0 0 0 3px rgba(78,164,239,.32), 0 0 16px rgba(78,164,239,.85);
+      background: var(--nm3-knob); pointer-events: none; opacity: 0;
+      box-shadow: 0 0 0 3px rgba(var(--nm3-accent-rgb),.32), 0 0 16px rgba(var(--nm3-accent-rgb),.85);
       transform: translate(-50%, -50%);
       transition: width .16s, height .16s, opacity .16s;
     }
     .nm3-seek-track:hover .nm3-seek-knob,
     .nm3-dragging .nm3-seek-knob { width: 16px; height: 16px; opacity: 1; }
     .nm3-dragging .nm3-seek-rail {
-      box-shadow: inset 0 1px 2px rgba(0,0,0,.6), 0 0 0 1px rgba(78,164,239,.45);
+      box-shadow: inset 0 1px 2px rgba(var(--nm3-shadow-rgb),.6), 0 0 0 1px rgba(var(--nm3-accent-rgb),.45);
     }
     /* 悬停 / 拖动时浮出的目标时间 */
     .nm3-seek-tip {
       position: absolute; bottom: calc(100% + 4px); transform: translateX(-50%);
       padding: 3px 9px; border-radius: 8px; font-size: 11px; white-space: nowrap;
-      background: rgba(30,33,51,.97); color: var(--nm3-fg);
-      border: 1px solid rgba(78,164,239,.38);
-      box-shadow: 0 8px 22px rgba(0,0,0,.5);
+      background: rgba(var(--nm3-card-rgb),.97); color: var(--nm3-fg);
+      border: 1px solid rgba(var(--nm3-accent-rgb),.38);
+      box-shadow: 0 8px 22px rgba(var(--nm3-shadow-rgb),.5);
       opacity: 0; transition: opacity .16s; pointer-events: none;
       font-variant-numeric: tabular-nums;
     }
@@ -1149,24 +1252,24 @@
     .nm3-cbtn {
       display: inline-flex; align-items: center; justify-content: center; gap: 7px;
       height: 34px; min-width: 34px; padding: 0 11px; box-sizing: border-box;
-      border-radius: 17px; border: 1px solid rgba(218,226,237,.14);
-      background: rgba(218,226,237,.05); color: var(--nm3-fg2);
+      border-radius: 17px; border: 1px solid rgba(var(--nm3-fg-rgb),.14);
+      background: rgba(var(--nm3-fg-rgb),.05); color: var(--nm3-fg2);
       font-size: 12.5px; font-family: inherit; line-height: 1;
       cursor: pointer; white-space: nowrap; transition: all .18s;
     }
-    .nm3-cbtn:hover { border-color: rgba(78,164,239,.6); color: var(--nm3-accent); background: var(--nm3-hover); }
-    .nm3-cbtn.nm3-on { color: var(--nm3-accent); border-color: rgba(78,164,239,.5); background: var(--nm3-sel); }
+    .nm3-cbtn:hover { border-color: rgba(var(--nm3-accent-rgb),.6); color: var(--nm3-accent); background: var(--nm3-hover); }
+    .nm3-cbtn.nm3-on { color: var(--nm3-accent); border-color: rgba(var(--nm3-accent-rgb),.5); background: var(--nm3-sel); }
     .nm3-cbtn.nm3-busy { cursor: progress; opacity: .7; }
     .nm3-cbtn.nm3-busy span { font-size: 11.5px; color: var(--nm3-accent); }
     .nm3-cbtn svg { flex: 0 0 auto; }
     /* 主按钮：播放 / 暂停 */
     .nm3-cbtn-play {
       width: 46px; height: 46px; min-width: 46px; padding: 0; border-radius: 50%;
-      border-color: transparent; color: ${INK};
-      background: linear-gradient(135deg, ${PALETTE.accent}, ${PALETTE.deep});
-      box-shadow: 0 6px 20px rgba(78,164,239,.30);
+      border-color: transparent; color: var(--nm3-ink);
+      background: linear-gradient(135deg, var(--nm3-accent), var(--nm3-accent2));
+      box-shadow: 0 6px 20px rgba(var(--nm3-accent-rgb),.30);
     }
-    .nm3-cbtn-play:hover { filter: brightness(1.1); color: ${INK}; }
+    .nm3-cbtn-play:hover { filter: brightness(1.1); color: var(--nm3-ink); }
     /* 音量 */
     .nm3-vol {
       position: relative; width: 96px; height: 34px; flex: 0 0 auto;
@@ -1175,7 +1278,7 @@
     .nm3-vol-rail {
       position: absolute; left: 2px; right: 2px; top: 50%; transform: translateY(-50%);
       height: 4px; border-radius: 999px; overflow: hidden;
-      background: rgba(218,226,237,.16);
+      background: rgba(var(--nm3-fg-rgb),.16);
     }
     .nm3-vol-fill {
       position: absolute; left: 0; top: 0; bottom: 0; width: 100%; border-radius: 999px;
@@ -1183,16 +1286,16 @@
     }
     .nm3-vol-knob {
       position: absolute; top: 50%; left: 100%; width: 10px; height: 10px; border-radius: 50%;
-      background: #fff; pointer-events: none;
-      box-shadow: 0 0 0 2px rgba(20,21,33,.75), 0 0 10px rgba(78,164,239,.7);
+      background: var(--nm3-knob); pointer-events: none;
+      box-shadow: 0 0 0 2px rgba(var(--nm3-bg-rgb),.75), 0 0 10px rgba(var(--nm3-accent-rgb),.7);
       transform: translate(-50%, -50%); transition: width .14s, height .14s;
     }
     .nm3-vol:hover .nm3-vol-knob,
     .nm3-vol.nm3-dragging .nm3-vol-knob { width: 14px; height: 14px; }
-    .nm3-vol.nm3-dragging .nm3-vol-rail { background: rgba(218,226,237,.26); }
+    .nm3-vol.nm3-dragging .nm3-vol-rail { background: rgba(var(--nm3-fg-rgb),.26); }
     /* 队列条数 */
     .nm3-cbtn em { font-style: normal; font-size: 11.5px; color: var(--nm3-fg3); }
-    .nm3-cbtn.nm3-on em { color: rgba(218,226,237,.7); }
+    .nm3-cbtn.nm3-on em { color: rgba(var(--nm3-fg-rgb),.7); }
 
     @media (max-width: 1000px) {
       .nm3-ctl { gap: 10px; }
@@ -1219,18 +1322,18 @@
     .nm3-q-btn {
       display: inline-flex; align-items: center; gap: 7px;
       height: 34px; padding: 0 14px; border-radius: 17px;
-      border: 1px solid rgba(218,226,237,.16); background: rgba(218,226,237,.05);
+      border: 1px solid rgba(var(--nm3-fg-rgb),.16); background: rgba(var(--nm3-fg-rgb),.05);
       color: var(--nm3-fg2); font-size: 12.5px; font-family: inherit;
       cursor: pointer; white-space: nowrap; transition: all .18s;
     }
     .nm3-q-btn:hover,
-    .nm3-q-wrap.nm3-open .nm3-q-btn { border-color: rgba(78,164,239,.6); color: var(--nm3-accent); }
+    .nm3-q-wrap.nm3-open .nm3-q-btn { border-color: rgba(var(--nm3-accent-rgb),.6); color: var(--nm3-accent); }
     .nm3-q-menu {
       position: absolute; right: 0; top: calc(100% + 8px); z-index: 6;
       min-width: 212px; padding: 6px; display: none;
       border-radius: 12px; background: var(--nm3-card);
-      border: 1px solid rgba(78,164,239,.22);
-      box-shadow: 0 18px 44px rgba(0,0,0,.6);
+      border: 1px solid rgba(var(--nm3-accent-rgb),.22);
+      box-shadow: 0 18px 44px rgba(var(--nm3-shadow-rgb),.6);
     }
     .nm3-q-wrap.nm3-open .nm3-q-menu { display: block; }
     .nm3-q-menu a {
@@ -1244,7 +1347,7 @@
     .nm3-q-vip {
       font-style: normal; font-size: 10px; line-height: 14px;
       margin-left: 5px; padding: 0 4px; border-radius: 4px;
-      color: var(--nm3-warm); background: rgba(147,117,98,.22);
+      color: var(--nm3-warm); background: rgba(var(--nm3-warm-rgb),.22);
     }
     .nm3-q-note { flex: 1 1 auto; text-align: right; font-size: 11px; color: var(--nm3-fg3); }
     .nm3-q-tick { flex: 0 0 auto; display: flex; color: var(--nm3-accent); }
@@ -1274,20 +1377,20 @@
     /* 当前这一组（主歌词 + 它的翻译 / 罗马音）一起点亮 —— 翻译也跟着同步 */
     #nm3-view-listen .nm3-lyric-grp.nm3-cur > .nm3-lyric-line {
       color: var(--nm3-accent); font-weight: 600; font-size: 17px;
-      text-shadow: 0 0 22px rgba(78,164,239,.45);
+      text-shadow: 0 0 22px rgba(var(--nm3-accent-rgb),.45);
     }
     #nm3-view-listen .nm3-lyric-grp.nm3-cur > .nm3-lyric-line.nm3-trans {
-      color: rgba(218,226,237,.86); font-weight: 400; font-size: 13.5px; text-shadow: none;
+      color: rgba(var(--nm3-fg-rgb),.86); font-weight: 400; font-size: 13.5px; text-shadow: none;
     }
     #nm3-view-listen .nm3-lyric-grp.nm3-cur > .nm3-lyric-line.nm3-roma {
-      color: rgba(218,226,237,.62); font-weight: 400; font-size: 12.5px; text-shadow: none;
+      color: rgba(var(--nm3-fg-rgb),.62); font-weight: 400; font-size: 12.5px; text-shadow: none;
     }
     #nm3-view-listen .nm3-lyric-grp.nm3-cur > .nm3-lyric-line:hover { transform: scale(1.06); }
     #nm3-view-listen .nm3-lyric-line.nm3-trans {
-      color: rgba(218,226,237,.42); font-size: 13px; padding-top: 0; padding-bottom: 4px;
+      color: rgba(var(--nm3-fg-rgb),.42); font-size: 13px; padding-top: 0; padding-bottom: 4px;
     }
     #nm3-view-listen .nm3-lyric-line.nm3-roma {
-      color: rgba(218,226,237,.28); font-size: 12px; font-style: italic;
+      color: rgba(var(--nm3-fg-rgb),.28); font-size: 12px; font-style: italic;
       padding-top: 0; padding-bottom: 5px;
     }
     #nm3-view-listen .nm3-lyric-line.nm3-trans:hover { color: var(--nm3-fg2); }
@@ -1306,7 +1409,7 @@
       font-size: 12px; letter-spacing: 1.5px; color: var(--nm3-warm);
       margin: 4px 0 10px;
     }
-    .nm3-cm-grp::after { content: ''; flex: 1 1 auto; height: 1px; background: rgba(147,117,98,.28); }
+    .nm3-cm-grp::after { content: ''; flex: 1 1 auto; height: 1px; background: rgba(var(--nm3-warm-rgb),.28); }
     .nm3-cm-item { display: flex; gap: 13px; padding: 15px 0; border-bottom: 1px solid var(--nm3-line); }
     .nm3-cm-avatar {
       width: 34px; height: 34px; border-radius: 50%; flex: 0 0 auto;
@@ -1322,7 +1425,7 @@
     }
     .nm3-cm-reply {
       margin-top: 9px; padding: 9px 13px; border-radius: 9px;
-      background: rgba(218,226,237,.05); border-left: 2px solid rgba(147,117,98,.5);
+      background: rgba(var(--nm3-fg-rgb),.05); border-left: 2px solid rgba(var(--nm3-warm-rgb),.5);
       font-size: 12.5px; line-height: 1.7; color: var(--nm3-fg2); word-break: break-word;
     }
     .nm3-cm-reply b { color: var(--nm3-warm); font-weight: 500; }
@@ -1334,12 +1437,12 @@
     .nm3-cm-like {
       display: inline-flex; align-items: center; gap: 5px;
       height: 24px; padding: 0 10px; border-radius: 12px;
-      border: 1px solid transparent; background: rgba(218,226,237,.06);
+      border: 1px solid transparent; background: rgba(var(--nm3-fg-rgb),.06);
       color: var(--nm3-fg3); font-size: 11.5px; font-family: inherit;
       cursor: pointer; transition: all .18s;
     }
-    .nm3-cm-like:hover { color: var(--nm3-accent); background: var(--nm3-hover); border-color: rgba(78,164,239,.35); }
-    .nm3-cm-like.nm3-on { color: var(--nm3-accent); background: var(--nm3-sel); border-color: rgba(78,164,239,.45); }
+    .nm3-cm-like:hover { color: var(--nm3-accent); background: var(--nm3-hover); border-color: rgba(var(--nm3-accent-rgb),.35); }
+    .nm3-cm-like.nm3-on { color: var(--nm3-accent); background: var(--nm3-sel); border-color: rgba(var(--nm3-accent-rgb),.45); }
     .nm3-cm-like.nm3-busy { opacity: .55; cursor: progress; }
     /* 歌名旁的歌手链接（可点进歌手详情） */
     .nm3-artist { color: inherit; text-decoration: none; transition: color .18s; }
@@ -1364,8 +1467,8 @@
     .nm3-empty-icon {
       width: 64px; height: 64px; border-radius: 50%;
       display: flex; align-items: center; justify-content: center;
-      background: rgba(78,164,239,.12); color: var(--nm3-accent);
-      box-shadow: 0 0 44px rgba(78,164,239,.20);
+      background: rgba(var(--nm3-accent-rgb),.12); color: var(--nm3-accent);
+      box-shadow: 0 0 44px rgba(var(--nm3-accent-rgb),.20);
     }
     .nm3-empty-title { margin-top: 20px; font-size: 17px; font-weight: 600; color: var(--nm3-fg); }
     .nm3-empty-sub { margin-top: 8px; font-size: 13px; color: var(--nm3-fg3); }
@@ -1380,13 +1483,13 @@
     .nm3-chip-btn {
       display: inline-flex; align-items: center; height: 32px; padding: 0 18px;
       border-radius: 16px; cursor: pointer; font-size: 13px; max-width: 230px;
-      color: var(--nm3-fg2); background: rgba(218,226,237,.06);
-      border: 1px solid rgba(218,226,237,.10);
+      color: var(--nm3-fg2); background: rgba(var(--nm3-fg-rgb),.06);
+      border: 1px solid rgba(var(--nm3-fg-rgb),.10);
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
       transition: color .18s, background .18s, border-color .18s, transform .18s;
     }
     .nm3-chip-btn:hover {
-      color: var(--nm3-accent); border-color: rgba(78,164,239,.55);
+      color: var(--nm3-accent); border-color: rgba(var(--nm3-accent-rgb),.55);
       background: var(--nm3-hover); transform: translateY(-1px);
     }
 
@@ -1402,22 +1505,22 @@
     .nm3-card-cover {
       position: relative; width: 100%; aspect-ratio: 1 / 1;
       border-radius: 14px; overflow: hidden; background: var(--nm3-card);
-      box-shadow: 0 4px 18px rgba(0,0,0,.4);
+      box-shadow: 0 4px 18px rgba(var(--nm3-shadow-rgb),.4);
       transition: transform .22s cubic-bezier(.4,0,.2,1), box-shadow .22s;
     }
     .nm3-card-cover.nm3-round { border-radius: 50%; }
     .nm3-card-cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
     .nm3-card:hover .nm3-card-cover {
       transform: translateY(-4px);
-      box-shadow: 0 16px 36px rgba(0,0,0,.55), 0 0 0 1px rgba(78,164,239,.35);
+      box-shadow: 0 16px 36px rgba(var(--nm3-shadow-rgb),.55), 0 0 0 1px rgba(var(--nm3-accent-rgb),.35);
     }
     .nm3-card-play {
       position: absolute; right: 10px; bottom: 10px;
       width: 38px; height: 38px; border-radius: 50%;
       display: flex; align-items: center; justify-content: center;
-      background: var(--nm3-accent); color: ${INK};
+      background: var(--nm3-accent); color: var(--nm3-ink);
       opacity: 0; transform: translateY(8px);
-      transition: opacity .2s, transform .2s; box-shadow: 0 6px 18px rgba(0,0,0,.5);
+      transition: opacity .2s, transform .2s; box-shadow: 0 6px 18px rgba(var(--nm3-shadow-rgb),.5);
     }
     .nm3-card:hover .nm3-card-play { opacity: 1; transform: translateY(0); }
     .nm3-card-play:hover { filter: brightness(1.12); transform: scale(1.08); }
@@ -1438,7 +1541,7 @@
     }
     .nm3-dh-cover {
       width: 82px; height: 82px; flex: 0 0 auto; border-radius: 12px; overflow: hidden;
-      background: var(--nm3-card); box-shadow: 0 10px 26px rgba(0,0,0,.5);
+      background: var(--nm3-card); box-shadow: 0 10px 26px rgba(var(--nm3-shadow-rgb),.5);
     }
     .nm3-dh-cover.nm3-round { border-radius: 50%; }
     .nm3-dh-cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
@@ -1451,14 +1554,14 @@
     /* 歌手简介：默认 4 行，点一下展开 */
     .nm3-bio {
       position: relative; margin: 16px 34px 6px; padding: 14px 18px;
-      border-radius: 12px; background: rgba(218,226,237,.04);
+      border-radius: 12px; background: rgba(var(--nm3-fg-rgb),.04);
       border: 1px solid var(--nm3-line); color: var(--nm3-fg2);
       font-size: 13px; line-height: 1.85; white-space: pre-wrap; cursor: pointer;
       max-height: 116px; overflow: hidden; transition: max-height .24s;
     }
     .nm3-bio::after {
       content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 44px;
-      background: linear-gradient(180deg, rgba(20,21,33,0), var(--nm3-bg));
+      background: linear-gradient(180deg, rgba(var(--nm3-bg-rgb),0), var(--nm3-bg));
       pointer-events: none; transition: opacity .2s;
     }
     .nm3-bio.nm3-open { max-height: 2000px; }
@@ -1473,14 +1576,14 @@
       display: flex; align-items: center; gap: 26px;
       margin: 6px 34px 34px; padding: 26px 30px; border-radius: 20px;
       background:
-        radial-gradient(120% 160% at 0% 0%, rgba(78,164,239,.22) 0%, rgba(45,60,129,.30) 42%, rgba(20,21,33,0) 100%),
-        linear-gradient(135deg, #1D2440 0%, #191B2C 62%);
-      border: 1px solid rgba(78,164,239,.18);
-      box-shadow: 0 10px 34px rgba(0,0,0,.38);
+        radial-gradient(120% 160% at 0% 0%, rgba(var(--nm3-accent-rgb),.22) 0%, rgba(var(--nm3-deep-rgb),.30) 42%, rgba(var(--nm3-bg-rgb),0) 100%),
+        linear-gradient(135deg, var(--nm3-hero-a) 0%, var(--nm3-hero-b) 62%);
+      border: 1px solid rgba(var(--nm3-accent-rgb),.18);
+      box-shadow: 0 10px 34px rgba(var(--nm3-shadow-rgb),.38);
     }
     .nm3-hero-cover {
       width: 112px; height: 112px; flex: 0 0 auto; border-radius: 14px; overflow: hidden;
-      background: var(--nm3-deep); box-shadow: 0 12px 30px rgba(0,0,0,.5);
+      background: var(--nm3-deep); box-shadow: 0 12px 30px rgba(var(--nm3-shadow-rgb),.5);
     }
     .nm3-hero-cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
     .nm3-hero-info { flex: 1 1 auto; min-width: 0; }
@@ -1495,11 +1598,11 @@
     /* ══════════════ 轻提示 ══════════════ */
     .nm3-toast {
       position: fixed; left: 50%; bottom: 34px; transform: translateX(-50%);
-      background: rgba(30,33,51,.96); color: var(--nm3-fg);
-      border: 1px solid rgba(78,164,239,.32);
+      background: rgba(var(--nm3-card-rgb),.96); color: var(--nm3-fg);
+      border: 1px solid rgba(var(--nm3-accent-rgb),.32);
       font-size: 13px; padding: 10px 22px; border-radius: 19px;
       z-index: 9999; pointer-events: none; opacity: 0; transition: opacity .22s;
-      box-shadow: 0 12px 32px rgba(0,0,0,.5);
+      box-shadow: 0 12px 32px rgba(var(--nm3-shadow-rgb),.5);
       font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
     }
     .nm3-toast.nm3-show { opacity: 1; }
@@ -1522,6 +1625,308 @@
       .nm3-t-idx, .nm3-t-alb { display: none; }
       .nm3-grid { grid-template-columns: repeat(auto-fill, minmax(124px, 1fr)); gap: 18px; }
     }
+  `;
+
+  /* 皮肤层：只换变量 + 少量装饰，布局仍在上面那份 CSS 里 */
+  const SKIN_CSS = `
+  /* ═══════════════════════════════ 皮肤 ═══════════════════════════════
+   * 布局只有一份（上面那段），皮肤只做两件事：
+   *   1) 按 <html data-nm3-skin="…"> 换掉 --nm3-* 变量（整色 + 通道量）
+   *   2) 少数几处结构装饰：页头细线、刻度进度条、档案框封面、扫描线
+   * 三套：原皮（无属性）/ rhine-day 莱茵 · 晨雾 / rhine-night 莱茵 · 月影。
+   * 皮肤之间共享同一份 DOM 与动效，换皮肤不重建界面、不打断播放。
+   */
+
+  /* ── 换皮肤的按钮（三套都显示在页头右侧） ───────────────────── */
+  #nm3-bar .nm3-skin {
+    flex: 0 0 auto; display: flex; align-items: center; gap: 6px;
+    height: 30px; padding: 0 10px; margin-left: 2px;
+    border: 1px solid var(--nm3-line); border-radius: 9px;
+    background: rgba(var(--nm3-card-rgb),.72);
+    color: var(--nm3-fg2); font: inherit; font-size: 12.5px; line-height: 1;
+    cursor: pointer; -webkit-user-select: none; user-select: none;
+    transition: color .18s, border-color .18s, background .18s;
+  }
+  #nm3-bar .nm3-skin:hover {
+    color: var(--nm3-accent);
+    border-color: rgba(var(--nm3-accent-rgb),.42);
+    background: rgba(var(--nm3-accent-rgb),.12);
+  }
+  #nm3-bar .nm3-skin:active { transform: translateY(1px); }
+  #nm3-bar .nm3-skin svg { flex: 0 0 auto; }
+  #nm3-bar .nm3-skin em {
+    font-style: normal; letter-spacing: .06em; white-space: nowrap;
+  }
+
+  /* ── 莱茵生命 · 晨雾：暖白纸面 + 黑墨 + 信号橙（RhineLabUI 原色） ── */
+  html[data-nm3-skin="rhine-day"] {
+    color-scheme: light;
+    --nm3-bg: #EFEAE1;
+    --nm3-bg2: #E5DED2;
+    --nm3-card: #F8F5EF;
+    --nm3-deep: #3A3733;
+    --nm3-accent: #C2571F;
+    --nm3-fg: #1B1A18;
+    --nm3-warm: #937562;
+    --nm3-ink: #1B1A18;
+
+    --nm3-bg-rgb: 239,234,225;
+    --nm3-bg2-rgb: 229,222,210;
+    --nm3-card-rgb: 248,245,239;
+    --nm3-deep-rgb: 58,55,51;
+    --nm3-accent-rgb: 194,87,31;
+    --nm3-fg-rgb: 27,26,24;
+    --nm3-warm-rgb: 147,117,98;
+    --nm3-ink-rgb: 27,26,24;
+    --nm3-channel-rgb: 27,26,24;
+    --nm3-fg2: rgba(27,26,24,.74);
+    --nm3-fg3: rgba(27,26,24,.56);
+    --nm3-shadow-rgb: 60,52,44;
+
+    --nm3-hi: #F1D3B4;
+    --nm3-hero-a: #F4EFE5;
+    --nm3-hero-b: #E6DECF;
+    --nm3-bar-grad: #F2EDE3;
+    --nm3-knob: #FFFFFF;
+    --nm3-accent2: #DE8443;
+    --nm3-solid: #1B1A18;
+    --nm3-solid-fg: #F8F5EF;
+    --nm3-glow: none;
+  }
+
+  /* ── 莱茵生命 · 月影：深蓝夜色 + 冷白 + 信号橙 ─────────────── */
+  html[data-nm3-skin="rhine-night"] {
+    color-scheme: dark;
+    --nm3-bg: #0F1116;
+    --nm3-bg2: #141720;
+    --nm3-card: #191D27;
+    --nm3-deep: #2A3350;
+    --nm3-accent: #E4692A;
+    --nm3-fg: #E7E9EC;
+    --nm3-warm: #B08050;
+    --nm3-ink: #080A0E;
+
+    --nm3-bg-rgb: 15,17,22;
+    --nm3-bg2-rgb: 20,23,32;
+    --nm3-card-rgb: 25,29,39;
+    --nm3-deep-rgb: 42,51,80;
+    --nm3-accent-rgb: 228,105,42;
+    --nm3-fg-rgb: 231,233,236;
+    --nm3-warm-rgb: 176,128,80;
+    --nm3-ink-rgb: 231,233,236;
+    --nm3-channel-rgb: 8,10,14;
+    --nm3-shadow-rgb: 0,0,0;
+
+    --nm3-hi: #FFC38C;
+    --nm3-hero-a: #1B2231;
+    --nm3-hero-b: #11151C;
+    --nm3-bar-grad: #12151D;
+    --nm3-knob: #F2F4F7;
+    --nm3-accent2: #B4521D;
+    --nm3-solid: #22283A;
+    --nm3-solid-fg: #E7E9EC;
+    --nm3-glow: none;
+  }
+
+  /* ═════ 以下装饰只在莱茵皮肤下生效（html[data-nm3-skin^="rhine"]） ═════ */
+
+  /* 等宽字只给「标签类」文本用，正文保持无衬线，中文不糊 */
+  html[data-nm3-skin^="rhine"] #nm3-bar .nm3-brand,
+  html[data-nm3-skin^="rhine"] #nm3-bar .nm3-tab,
+  html[data-nm3-skin^="rhine"] .nm3-sec-title,
+  html[data-nm3-skin^="rhine"] .nm3-hero-label,
+  html[data-nm3-skin^="rhine"] .nm3-card-nick,
+  html[data-nm3-skin^="rhine"] .nm3-skin em {
+    font-family: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+    letter-spacing: .10em;
+  }
+
+  /* 数字一律等宽对齐（时长、序号、计数） */
+  html[data-nm3-skin^="rhine"] .nm3-seek-time,
+  html[data-nm3-skin^="rhine"] .nm3-hero-count,
+  html[data-nm3-skin^="rhine"] .nm3-t-dur,
+  html[data-nm3-skin^="rhine"] .nm3-t-idx,
+  html[data-nm3-skin^="rhine"] .nm3-t-badge,
+  html[data-nm3-skin^="rhine"] .nm3-card-count {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum" 1;
+    letter-spacing: .05em;
+  }
+
+  /* 页头：去渐变、去投影，换成一条硬底线 + 左侧信号条 */
+  html[data-nm3-skin^="rhine"] #nm3-bar {
+    background: var(--nm3-bar-grad);
+    border-bottom: 1px solid rgba(var(--nm3-fg-rgb),.20);
+    box-shadow: none;
+  }
+  html[data-nm3-skin^="rhine"] #nm3-bar::after {
+    content: '';
+    position: absolute; left: 0; bottom: -1px;
+    width: 96px; height: 2px;
+    background: var(--nm3-accent);
+  }
+  /* 品牌标记：圆灯 → 45° 小方块（档案盒封口） */
+  html[data-nm3-skin^="rhine"] #nm3-bar .nm3-brand i {
+    width: 12px; height: 12px; margin: 0 3px;
+    border-radius: 1px;
+    background: none;
+    border: 1.5px solid var(--nm3-accent);
+    box-shadow: none;
+    transform: rotate(45deg);
+  }
+  html[data-nm3-skin^="rhine"] #nm3-bar .nm3-brand {
+    letter-spacing: .16em; font-weight: 700;
+  }
+  html[data-nm3-skin^="rhine"] #nm3-bar .nm3-brand span::after {
+    content: ' / RHINE';
+    color: var(--nm3-fg3);
+    font-size: 10.5px; letter-spacing: .18em;
+  }
+  /* 页签名：直角下划线 + 选中时压一层底 */
+  html[data-nm3-skin^="rhine"] #nm3-bar .nm3-tab { letter-spacing: .12em; }
+  html[data-nm3-skin^="rhine"] #nm3-bar .nm3-tab::after {
+    border-radius: 0; box-shadow: none; height: 2px;
+    left: 12px; right: 12px;
+  }
+  html[data-nm3-skin^="rhine"] #nm3-bar .nm3-tab.nm3-on {
+    background: linear-gradient(180deg, rgba(var(--nm3-accent-rgb),0), rgba(var(--nm3-accent-rgb),.10));
+    font-weight: 600;
+  }
+  /* 搜索框 / 用户胶囊：直角化 */
+  html[data-nm3-skin^="rhine"] #nm3-bar .nm3-search,
+  html[data-nm3-skin^="rhine"] #nm3-bar .nm3-search button,
+  html[data-nm3-skin^="rhine"] #nm3-bar .nm3-user-chip,
+  html[data-nm3-skin^="rhine"] #nm3-bar .nm3-skin {
+    border-radius: 2px;
+  }
+  html[data-nm3-skin^="rhine"] #nm3-bar .nm3-user-chip img { border-radius: 2px; }
+
+  /* 进度条：暗槽去掉圆角与内阴影，换成 HUD 刻度 */
+  html[data-nm3-skin^="rhine"] .nm3-seek-rail {
+    border-radius: 0;
+    height: 7px;
+    background-image:
+      repeating-linear-gradient(90deg, rgba(var(--nm3-fg-rgb),.13) 0 1px, rgba(var(--nm3-fg-rgb),0) 1px 15px),
+      linear-gradient(180deg, rgba(var(--nm3-channel-rgb),.90), rgba(var(--nm3-fg-rgb),.16));
+    box-shadow: inset 0 0 0 1px rgba(var(--nm3-fg-rgb),.10);
+  }
+  html[data-nm3-skin^="rhine"] .nm3-seek-track:hover .nm3-seek-rail,
+  html[data-nm3-skin^="rhine"] .nm3-dragging .nm3-seek-rail { height: 10px; }
+  html[data-nm3-skin^="rhine"] .nm3-seek-fill {
+    border-radius: 0;
+    box-shadow: none;
+  }
+  /* 末端那道流动光 → 一根 2px 的读数线 */
+  html[data-nm3-skin^="rhine"] .nm3-seek-fill::after {
+    width: 2px;
+    background: var(--nm3-hi);
+  }
+  html[data-nm3-skin^="rhine"] .nm3-seek-buf {
+    background: repeating-linear-gradient(115deg,
+      rgba(var(--nm3-fg-rgb),.20) 0 4px, rgba(var(--nm3-fg-rgb),.07) 4px 9px);
+  }
+  /* 旋钮 → 竖向滑块 */
+  html[data-nm3-skin^="rhine"] .nm3-seek-knob {
+    border-radius: 1px; width: 3px; height: 13px;
+    box-shadow: 0 0 0 1px rgba(var(--nm3-accent-rgb),.55);
+  }
+  html[data-nm3-skin^="rhine"] .nm3-seek-track:hover .nm3-seek-knob,
+  html[data-nm3-skin^="rhine"] .nm3-dragging .nm3-seek-knob { width: 5px; height: 16px; }
+
+  /* 封面 → 档案盒：直角、细白边、顶部压一条封条 */
+  html[data-nm3-skin^="rhine"] .nm3-card-cover,
+  html[data-nm3-skin^="rhine"] .nm3-hero-cover,
+  html[data-nm3-skin^="rhine"] .nm3-dh-cover,
+  html[data-nm3-skin^="rhine"] .nm3-t-cover {
+    border-radius: 2px;
+    box-shadow: 0 0 0 1px rgba(var(--nm3-fg-rgb),.16), 0 10px 22px rgba(var(--nm3-shadow-rgb),.22);
+  }
+  html[data-nm3-skin^="rhine"] .nm3-card-cover { position: relative; }
+  html[data-nm3-skin^="rhine"] .nm3-card-cover::after {
+    content: ''; position: absolute; inset: 0 0 auto 0; height: 2px;
+    background: rgba(var(--nm3-fg-rgb),.30);
+  }
+  html[data-nm3-skin^="rhine"] .nm3-card:hover .nm3-card-cover {
+    box-shadow: 0 0 0 1px rgba(var(--nm3-accent-rgb),.62), 0 12px 26px rgba(var(--nm3-shadow-rgb),.28);
+  }
+  html[data-nm3-skin^="rhine"] .nm3-card-cover.nm3-round { border-radius: 50%; }
+  html[data-nm3-skin^="rhine"] .nm3-card-cover.nm3-round::after { display: none; }
+
+  /* 小节标题：前面加一枚信号色竖条 */
+  html[data-nm3-skin^="rhine"] .nm3-sec-title { letter-spacing: .12em; }
+  html[data-nm3-skin^="rhine"] .nm3-sec-title::before {
+    content: '';
+    display: inline-block; width: 3px; height: 11px; margin-right: 8px;
+    vertical-align: -1px; background: var(--nm3-accent);
+  }
+
+  /* 歌单 / 歌手头图：左侧档案脊 + 极淡扫描线 */
+  html[data-nm3-skin^="rhine"] .nm3-hero {
+    border-radius: 2px;
+    border-left: 3px solid var(--nm3-accent);
+    background-image:
+      repeating-linear-gradient(0deg, rgba(var(--nm3-fg-rgb),.035) 0 1px, rgba(var(--nm3-fg-rgb),0) 1px 3px),
+      linear-gradient(120deg, var(--nm3-hero-a), var(--nm3-hero-b));
+  }
+
+  /* 详情头（歌单 / 专辑 / 歌手）：同一条档案语言——扫描线 + 底边一小段信号色 */
+  html[data-nm3-skin^="rhine"] .nm3-dh {
+    background-image: repeating-linear-gradient(0deg,
+      rgba(var(--nm3-fg-rgb),.030) 0 1px, rgba(var(--nm3-fg-rgb),0) 1px 3px);
+  }
+  html[data-nm3-skin^="rhine"] .nm3-dh::before {
+    content: '';
+    position: absolute; left: 0; bottom: -1px; width: 72px; height: 2px;
+    background: var(--nm3-accent);
+  }
+
+  /* 浮层、提示、菜单、小按钮：直角 + 硬边，去掉玻璃感与药丸感 */
+  html[data-nm3-skin^="rhine"] .nm3-toast,
+  html[data-nm3-skin^="rhine"] .nm3-user-menu,
+  html[data-nm3-skin^="rhine"] .nm3-btn,
+  html[data-nm3-skin^="rhine"] .nm3-tab-btn,
+  html[data-nm3-skin^="rhine"] .nm3-back,
+  html[data-nm3-skin^="rhine"] .nm3-seg,
+  html[data-nm3-skin^="rhine"] .nm3-seg a,
+  html[data-nm3-skin^="rhine"] #nm3-view-listen .nm3-chip,
+  html[data-nm3-skin^="rhine"] .nm3-cbtn,
+  html[data-nm3-skin^="rhine"] .nm3-q-btn,
+  html[data-nm3-skin^="rhine"] .nm3-tag,
+  html[data-nm3-skin^="rhine"] .nm3-bio,
+  html[data-nm3-skin^="rhine"] .nm3-cover-nick {
+    border-radius: 2px;
+  }
+  html[data-nm3-skin^="rhine"] .nm3-toast {
+    border: 1px solid rgba(var(--nm3-fg-rgb),.22);
+    box-shadow: 0 14px 34px rgba(var(--nm3-shadow-rgb),.30);
+  }
+  /* 听歌页背景：原皮是「封面模糊铺底」，莱茵皮肤换成蓝图网格 + 扫描线。
+   * 实测：一张暖色封面在上面糊成一片，纸面与夜色都会被染浑，所以不用它。 */
+  html[data-nm3-skin^="rhine"] #nm3-view-listen .nm3-np-bg {
+    background-image:
+      linear-gradient(rgba(var(--nm3-fg-rgb),.050) 1px, rgba(var(--nm3-fg-rgb),0) 1px),
+      linear-gradient(90deg, rgba(var(--nm3-fg-rgb),.050) 1px, rgba(var(--nm3-fg-rgb),0) 1px),
+      repeating-linear-gradient(0deg, rgba(var(--nm3-fg-rgb),.026) 0 1px, rgba(var(--nm3-fg-rgb),0) 1px 3px) !important;
+    background-size: 46px 46px, 46px 46px, 100% 3px !important;
+    background-position: 0 0, 0 0, 0 0 !important;
+    background-color: transparent !important;
+    filter: none !important;
+    opacity: 1 !important;
+    transform: none !important;
+    -webkit-mask-image: radial-gradient(120% 78% at 50% 16%, #000 28%, rgba(0,0,0,.30) 72%, transparent 94%);
+    mask-image: radial-gradient(120% 78% at 50% 16%, #000 28%, rgba(0,0,0,.30) 72%, transparent 94%);
+  }
+
+  /* 正在唱的那一行：左边一根信号条；负 margin 抵消宽度，版面不跳 */
+  html[data-nm3-skin^="rhine"] #nm3-view-listen .nm3-lyric-grp.nm3-cur {
+    border-left: 2px solid var(--nm3-accent);
+    padding-left: 12px;
+    margin-left: -14px;
+  }
+  html[data-nm3-skin^="rhine"] ::selection {
+    background: rgba(var(--nm3-accent-rgb),.26);
+    color: var(--nm3-fg);
+  }
   `;
 
   /* ═══════════════════════════ 状态 ═══════════════════════════ */
@@ -1578,6 +1983,7 @@
   let likedSet = null;        // 「我喜欢的音乐」trackId 集合（null=还没取，false=取不到）
   let likedFor = null;        // 这份集合对应的 uid
   let likedBusy = false;
+  let likedRetryAt = 0;       // 上次读收藏集合失败的时间（失败要能重试，不能一辈子不亮 ♡）
   let likeBusy = false;       // 收藏请求正在飞（防连点）
   const likeLog = [];         // 写操作诊断（点赞 / 收藏），同时暴露成 window.__nm3LikeLog
 
@@ -1793,7 +2199,14 @@
         '<input id="nm3-input" type="text" placeholder="搜索歌曲、歌手、专辑、歌单" autocomplete="off">' +
         '<button id="nm3-go" type="button">搜索</button>' +
       '</div>' +
+      '<button class="nm3-skin" id="nm3-skin" type="button">' + SVG.skin(14, 'currentColor') + '<em>原皮</em></button>' +
       '<div class="nm3-user" id="nm3-user"></div>';
+
+    barEl.querySelector('#nm3-skin').addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      nextSkin();
+    });
 
     barEl.querySelector('.nm3-tabs').addEventListener('click', (e) => {
       const a = e.target.closest('.nm3-tab');
@@ -1836,6 +2249,7 @@
     });
 
     document.body.appendChild(barEl);
+    renderSkinChip();   // 按钮刚建出来，把当前皮肤的名字填进去
   }
 
   function renderUser() {
@@ -2574,32 +2988,51 @@
    * 只取一次（换账号失效），点过收藏后延迟重取一次校验。
    */
   async function ensureLikedSet(force) {
-    if (likedBusy) return;
-    const id = await getUid();
-    if (!id) { likedSet = false; return; }
-    if (!force && likedFor === id && likedSet instanceof Set) return;
-
-    likedBusy = true;
-    likedFor = id;
-    try {
-      const d = await apiGet('/api/user/playlist', { uid: id, limit: 1000, offset: 0 });
-      const liked = ((d && d.playlist) || []).find((p) => p && p.specialType === 5);
-      if (!liked) { if (likedFor === id) likedSet = false; return; }
-      // trackIds 才是完整列表（歌单很大时 tracks 会被截断）。万一某个接口版本
-      // 没给 trackIds，就退回 tracks —— 把 n 放大到 1000 再取一次。
-      let pl = ((await apiGet('/api/v6/playlist/detail', { id: liked.id, n: 1, s: 8 })) || {}).playlist || {};
-      let ids = likedIdsOf(pl);
-      if (!ids.length) {
-        pl = ((await apiGet('/api/v6/playlist/detail', { id: liked.id, n: 1000, s: 8 })) || {}).playlist || {};
-        ids = likedIdsOf(pl);
+    /* ★ 并发调用共享同一次读取。
+     *
+     * 以前这里是 `if (likedBusy) return;` —— 正在读的时候进来的调用者拿到的是
+     * **读到一半的状态**（likedSet 还是 null）。doLike 里 `before = isLiked(…)`
+     * 于是变成 null，`want = before !== true` 就成了「收藏」：本来想取消的歌会被
+     * 再收藏一遍，而后面每条口径的状态校验也都在读 null，最后只能报「没生效」。
+     * 现在改成共享 pending：等结果，不拿半成品。                                     */
+    if (ensureLikedSet.pending) return ensureLikedSet.pending;
+    const p = (async () => {
+      likedBusy = true;
+      let uidNow = null;
+      try {
+        const id = await getUid();
+        uidNow = id;
+        if (!id) { likedSet = false; likedFor = null; return false; }
+        if (!force && likedFor === id && likedSet instanceof Set) return true;
+        likedFor = id;
+        // 歌单详情有 CDN 缓存，带上时间戳，别读到「刚收藏完还看不见」的旧版本
+        const stamp = () => Date.now();
+        const d = await apiGet('/api/user/playlist', { uid: id, limit: 1000, offset: 0, timestamp: stamp() });
+        const liked = ((d && d.playlist) || []).find((p) => p && p.specialType === 5);
+        if (!liked) { likedSet = false; return false; }
+        likedPlId = liked.id;                    // 顺手记下 pid：写收藏要用它
+        // trackIds 才是完整列表（歌单很大时 tracks 会被截断）。万一某个接口版本
+        // 没给 trackIds，就退回 tracks —— 把 n 放大到 1000 再取一次。
+        let pl = ((await apiGet('/api/v6/playlist/detail', { id: liked.id, n: 1, s: 8, timestamp: stamp() })) || {}).playlist || {};
+        let ids = likedIdsOf(pl);
+        if (!ids.length) {
+          pl = ((await apiGet('/api/v6/playlist/detail', { id: liked.id, n: 1000, s: 8, timestamp: stamp() })) || {}).playlist || {};
+          ids = likedIdsOf(pl);
+        }
+        if (likedFor !== id) return false;
+        likedSet = new Set(ids);
+        return true;
+      } catch (e) {
+        warn('读取「我喜欢的音乐」失败', e);
+        if (likedFor === uidNow) likedSet = false;   // 取不到就不假装知道状态
+        return false;
+      } finally {
+        likedBusy = false;
+        ensureLikedSet.pending = null;
       }
-      if (likedFor !== id) return;
-      likedSet = new Set(ids);
-    } catch (e) {
-      if (likedFor === id) likedSet = false;   // 取不到就不假装知道状态
-    } finally {
-      likedBusy = false;
-    }
+    })();
+    ensureLikedSet.pending = p;
+    return p;
   }
 
   /** 从歌单详情里挖出歌曲 id：优先 trackIds（完整），其次 tracks */
@@ -2617,24 +3050,25 @@
   /**
    * 收藏 / 取消收藏当前这首歌。
    *
-   * ★ 为什么原来「点了没反应」：站点那条 POST /api/radio/like 在**不带客户端姿态**
-   *   时会被风控直接回 -460（作者实测；而 v4.8.0 起姿态默认关闭）。于是原来的顺序
-   *   （先打 radio/like → 不成再退 window.subscribe）实际是这样：
-   *     · radio/like 必回 -460；
-   *     · window.subscribe 只要**存在**就被当成成功返回（它在内容 iframe 没起来时
-   *       什么都不做也不报错），所以原生那颗 ♡ 从来没被真的点到过；
-   *     · 最后拿真实状态一校验当然没变，只能说「收藏没生效」。
+   * ★ 根因（比对线上包之后才看清）：现在的网页版播放器对**歌曲**根本没有
+   *   POST /api/radio/like 这条写接口了（core.js / ptframe.js 里搜不到它），
+   *   红心走的是 /api/playlist/manipulate/tracks 往「我喜欢的音乐」加歌
+   *   （track_playlist-add）。而 v4.9.0 的兜底顺序把 radio/like 放在最前面，
+   *   它在本机不带姿态时必回 -460，紧接着那几条又各有各的问题（详见下面 ① ~ ⑤），
+   *   最终校验读到的还是旧状态 —— 用户看到的就是「红心点了没反应」。
    *
-   * ★ 现在改成「多条官方口径依次试 + 每条都拿真实状态校验」，默认开关下也能用：
-   *     ① 客户端姿态开着时先走 /api/radio/like（那条路带姿态才通）
-   *     ② /api/v1/radio/like —— 同一个写接口的 v1 路由。实测不带任何姿态就回 301
-   *        （而不是 -460：风控只挂在老路由上），所以它才是默认设置下最靠谱的一条
-   *     ③ /api/v1/playlist/manipulate/tracks —— 网页版「添加到歌单」那条官方接口；
-   *        「我喜欢的音乐」本身就是 specialType 5 的歌单，op=add/del + pid 指它
+   * ★ 现在改成「按站点现行实现排序 + 每条都拿真实状态校验」：
+   *     ① /api/v1/playlist/manipulate/tracks —— 站点红心真正走的那条：
+   *        「我喜欢的音乐」就是 specialType 5 的歌单，op=add/del + pid 指它
+   *     ② /api/v1/radio/like —— 同一个写接口的 v1 路由，不带姿态就回 301 而不是
+   *        -460（风控只挂在老路由上），默认设置下也通
+   *     ③ 客户端姿态开着时 /api/radio/like（那条路带姿态才通）
    *     ④ 站点自己的入口：window.subscribe →（它静默无效时）播放条那颗原生 ♡
    *     ⑤ 姿态关着时最后再补一次 /api/radio/like（万一这个网络没被风控）
-   *   每条做完都等一会儿、重拉一次「我喜欢的音乐」核对；**只有状态真的变了才说成功**，
-   *   全都不成才把服务端给的 code 说成人话（诊断在 window.__nm3LikeLog）。
+   *   每条做完都等一会儿、重拉「我喜欢的音乐」核对（0.7s/1.5s/2.6s 递增重试，
+   *   歌单详情有 CDN 缓存）；**只有状态真的变了才说成功**，服务端 200 但状态没核上
+   *   时如实说「已提交、请刷新确认」，全都不成才把 code 说成人话
+   *   （诊断在 window.__nm3LikeLog）。
    *
    * ★ ④ 的两个入口都是**开关**（点一下切换），所以它们只在「当前状态确实与目标相反」
    *   时才动；每条之间都重新读状态，避免 ② 成了又被 ④ 切回去。状态读不回来时
@@ -2653,19 +3087,28 @@
     const songId = String(track.id);
     const fails = [];
     let via = '';
+    let softOk = '';                       // 服务端回了 200、但收藏状态没核上的那条口径
     try {
       await ensureLikedSet(true);
       const before = isLiked(songId);
       const want = before !== true;          // 状态拿不到（null）时按「收藏」来
       let known = before;
 
-      /** 等它落库，再重拉一次真实状态；读到了就更新 known */
-      const verify = async (waitMs) => {
-        if (waitMs) await new Promise((r) => setTimeout(r, waitMs));
-        await ensureLikedSet(true);
-        const v = isLiked(songId);
-        if (v !== null) known = v;
-        return v;
+      /* ★ 校验要等：歌单详情走 CDN，写入后 900ms 常常还读到旧版本。
+       *   以前只等一次 900ms，于是「其实收藏成功了」也被判成失败，
+       *   接着让下一条口径再去写一遍 —— 用户看到的就是「点了红心没反应」。
+       *   现在按 0.7s / 1.5s / 2.6s 递增重读，任一次读到目标状态就算成。          */
+      const verify = async (waits) => {
+        const list = waits || [700, 1500, 2600];
+        for (let i = 0; i < list.length; i++) {
+          if (list[i]) await new Promise((r) => setTimeout(r, list[i]));
+          await ensureLikedSet(true);
+          if (!(likedSet instanceof Set)) return null;   // 根本读不到收藏集合，再等也没用
+          const v = isLiked(songId);
+          if (v !== null) known = v;
+          if (v === want) return v;
+        }
+        return known;
       };
 
       /** 跑一条口径 → 校验；返回 true 表示状态真的变成目标了 */
@@ -2673,11 +3116,27 @@
         let res;
         try { res = await run(); } catch (e) { res = { code: 0, msg: (e && e.message) || '异常' }; }
         const code = (res && res.code != null) ? Number(res.code) : 0;
-        const now = await verify(code === 301 ? 0 : 900);
-        if (now === want) { via = name; return true; }
-        // 状态读不回来时（账号接口被限制之类）：服务端明确回 200 就认它，但如实标注
-        if (now === null && code === 200) { via = name + '（服务端 200，状态没核上）'; return true; }
-        fails.push(name + ' → code=' + code + ((res && res.msg) ? ' ' + res.msg : ''));
+        if (code === 200) {
+          const now = await verify();
+          if (now === want) { via = name; return true; }
+          // ★ 只有「服务端 200 + 状态确实变了」才算成功。以前这里在状态读不回来时
+          //   把 200 当成成功（via = name + '（服务端 200，状态没核上）'），于是
+          //   废弃的接口只要回 200 就会报「已收藏」，其实什么都没发生。
+          if (now === null) softOk = softOk || name;
+          fails.push(name + ' → code=200 但歌单里没看到变化');
+          return false;
+        }
+        // ★ playlist/manipulate 的 502 在站点自己的代码里就是「歌曲已存在」：
+        //   要「收藏」却回 502，说明这首本来就在「我喜欢的音乐」里 —— 这是成功，
+        //   不是失败（以前会把它记进 fails，最后报「收藏没生效」）。
+        if (code === 502 && want && name === 'playlist-manipulate') {
+          known = true;
+          via = name + '（服务端回「歌曲已存在」）';
+          return true;
+        }
+        // 非 200：服务端明确拒绝了，不再空等校验
+        if (code === 301) fails.push(name + ' → code=301 未登录');
+        else fails.push(name + ' → code=' + code + ((res && res.msg) ? ' ' + res.msg : ''));
         return false;
       };
 
@@ -2700,10 +3159,15 @@
         return forwardCtl('like') ? { code: 200, msg: '原生 ♡' } : { code: 0, msg: '没找到原生 ♡' };
       };
 
+      /* ★ 顺序按「现行站点真在用哪个」排。
+       *   翻过线上包（core.js / ptframe.js）就能确认：今天的播放器对**歌曲**根本没有
+       *   /api/radio/like 这条写接口，红心是走 /api/playlist/manipulate/tracks 往
+       *   「我喜欢的音乐」里加歌（track_playlist-add）。所以先打最正统的那条，
+       *   而不是先打一个可能已经被下线/风控的接口。                                */
       const strats = [];
-      if (clientSpoofOn()) strats.push(['radio-like（带客户端姿态）', () => postRadioLike(songId, want)]);
-      strats.push(['radio-like-v1', () => postRadioLikeV1(songId, want)]);
       strats.push(['playlist-manipulate', () => postPlaylistLike(songId, want)]);
+      strats.push(['radio-like-v1', () => postRadioLikeV1(songId, want)]);
+      if (clientSpoofOn()) strats.push(['radio-like（带客户端姿态）', () => postRadioLike(songId, want)]);
       strats.push(['site-subscribe', siteSubscribe]);
       strats.push(['site-like-button', siteLikeButton]);
       if (!clientSpoofOn()) strats.push(['radio-like', () => postRadioLike(songId, want)]);
@@ -2713,8 +3177,17 @@
       }
 
       if (via) {
+        // 本地状态先跟上，红心立刻变，不用等下一次轮询
+        if (likedSet instanceof Set) {
+          if (want) likedSet.add(songId);
+          else likedSet.delete(songId);
+        }
         log('收藏：', want ? '收藏' : '取消收藏', '成功（' + via + '）');
         toast(want ? '已收藏到「我喜欢的音乐」' : '已取消收藏', 2000);
+      } else if (softOk) {
+        // 服务端收下了，但读不回收藏状态 —— 如实说，别把「提交了」说成「已收藏」
+        warn('收藏已提交但状态读不回来', { songId: songId, want: want, via: softOk, fails: fails });
+        toast('收藏请求已提交（' + softOk + '），但暂时读不到「我喜欢的音乐」状态，刷新页面确认', 4200);
       } else {
         warn('收藏没生效', { songId: songId, want: want, fails: fails });
         toast(likeFailText(likeFailFrom(fails)) +
@@ -2907,6 +3380,8 @@
     if (code === 400) return '请求被服务端拒了（参数 / 资源 id 不被接受' + detail + '）';
     if (code === -460 || code === -462) return '被风控拦下了（提示网络环境有风险），换网络或过一会儿再试';
     if (code === 404) return '这个接口没找到（站点接口变了，控制台有详情）';
+    if (code === 505) return '「我喜欢的音乐」歌单满了（服务端回 505），先删掉几首再收藏';
+    if (code === 521) return '这个账号要先绑定手机号才能收藏（服务端回 521）';
     if (code === 250) return '服务端返回 250（业务失败），稍后再试';
     if (!code) return '请求没发出去' + detail;
     return '失败（code=' + code + detail + '）';
@@ -5382,8 +5857,13 @@
       renderNowPlaying();
       updateControlsUi();
       if (id) syncLyric();
-      // 收藏状态要一份「我喜欢的音乐」的 id 集合，登录后懒取一次
-      if (id && likedSet === null && !likedBusy) ensureLikedSet();
+      // 收藏状态要一份「我喜欢的音乐」的 id 集合，登录后懒取一次。
+      // ★ 取失败时（likedSet === false）以前就再也不重试了，红心于是永远不亮；
+      //   现在 20 秒后再试一次 —— 账号接口偶发失败不该让整首歌都点不了红心。
+      if (id && !likedBusy && (likedSet === null || (likedSet === false && Date.now() - likedRetryAt > 20000))) {
+        likedRetryAt = Date.now();
+        ensureLikedSet();
+      }
     } else if (id && trackMetaFor !== id) {
       // 不在听歌页时也要补元数据，切回去就能直接看到封面
       loadTrackMeta(id);
@@ -5402,6 +5882,8 @@
     hookQuality();
     markClientCookie();      // 会话按 PC 客户端姿态（os=pc 等）
     injectStyle(CSS, 'nm3-style');
+    injectStyle(SKIN_CSS, 'nm3-skin-style');   // 皮肤层：只覆盖变量与装饰
+    applySkin();                               // 记住的皮肤第一帧就生效，避免闪一下原皮
 
     const start = () => {
       if (!document.body) {

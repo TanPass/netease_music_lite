@@ -58,12 +58,29 @@ const CONFIG = {
 
 ---
 
+## 🩹 v4.10.0 修了什么（红心：点了没反应）
+
+> 只动收藏这一条链路，其它功能没碰。上一版（v4.9.0）就有"多条口径兜底"，但还是不灵 ——
+> 因为**顺序错了，而且"成功"的判定是假的**。
+
+| 环节 | 真正的原因 | 怎么修的 |
+| --- | --- | --- |
+| **点 ♡ 没反应 / 红心不亮 / 想取消却又被收藏上** | 站点**早就不是这样收藏了**。翻线上包就能确认：现在的网页版播放器对"歌曲"根本没有 `POST /api/radio/like`（`core.js`、`ptframe.js` 里都搜不到），红心走的是 `POST /api/playlist/manipulate/tracks` 往「我喜欢的音乐」加歌（`track_playlist-add`，成功码 `200`，`502` 表示"歌曲已存在"）。而 v4.9.0 把老路由排在第一位 —— 它在本机不带姿态必回 `-460`，用户看到的就是"点了没反应" | 按站点现行实现重排：`playlist/manipulate/tracks` → `/api/v1/radio/like` →（姿态开时）老路由 → 站点入口，姿态关着时最后才补一次老路由 |
+| **其实收藏成功了，却弹"收藏没生效"** | 校验只等**一次 900ms** 就重拉歌单，而「我喜欢的音乐」的详情走 CDN，常常还读到旧快照 → 判失败 → 换下一条口径又写一遍 | 校验改成 **0.7s / 1.5s / 2.6s 递增重读**，任一次读到目标状态就算成；读取带上 `timestamp` 顶掉 CDN 缓存；成功后本地集合立刻更新，红心不用等下一轮轮询 |
+| **接口回 `200` 就报"已收藏"，其实什么都没发生** | 旧代码在"状态读不回来"时把 `code === 200` 当成功（`via = name + '（服务端 200，状态没核上）'`），任何回 `200` 的空壳路由都能骗出一次成功提示 | 只有**状态真的变了**才算成功；读不回来时如实说"收藏请求已提交，请刷新确认"，不再冒充已收藏 |
+| **红心永远不亮** | 收藏集合读取失败（`likedSet === false`）以后**再也不重试**（轮询只在 `likedSet === null` 时触发）；而且跨 tick 的并发读取会各拿一份半截状态（`likedSet` 还是 `null`），"取消收藏"会被误判成"收藏" | 失败后 20 秒重试一次；并发读取合并成**同一个 pending**，不拿半成品开工 |
+
+四条都补了回归测试（`ok 11b`：CDN 旧快照要重试到成功 / `200` 但状态读不回只能报"已提交" / 并发读取只读一次），
+`e2e/` 那套真实浏览器冒烟测试也复跑过：`LIKE toast=[已收藏到「我喜欢的音乐」] writes=["/api/v1/playlist/manipulate/tracks?op=add"]`。
+
+---
+
 ## 🩹 v4.9.0 修了什么（四个真问题）
 
 | 现象 | 真正的原因 | 怎么修的 |
 | --- | --- | --- |
 | 搜索页点歌，**播出来的是上一次打开的那个歌单**里的歌 | 搜索结果与详情页共用同一套曲目行，但点行时一律往 `detail.tracks` 上播，而 `detail.tracks` 里还留着上次那个歌单；`data-list` 标了却没人读 | 行属于哪份列表写在容器的 `data-list` 上，点行按它分派（`listOf` / `playTrackAt`）；换关键词时连曲目和详情栈一起清掉 |
-| **收藏新歌没反应**（点 ♡ 只弹"收藏没生效"） | 收藏只打 `/api/radio/like`，而这条在**不带客户端姿态**时被风控直接回 `-460`（姿态默认关着）；退路 `window.subscribe` 又是"只要存在就算成功"，而它在内容 iframe 没起来时**静默什么都不做** —— 于是原生那颗 ♡ 从没被真的点到过 | 改成多条官方口径依次试、每条都拿「我喜欢的音乐」的真实状态校验：`/api/v1/radio/like`（实测同一写接口的 v1 路由不是 `-460`）→ `/api/v1/playlist/manipulate/tracks`（网页版「添加到歌单」，pid 指「我喜欢的音乐」）→ `window.subscribe` → 原生 ♡ → 最后才补一次老路由。开关型入口只在「当前状态确实相反」时才动，避免前一条成了又被后一条切回去 |
+| **收藏新歌没反应**（点 ♡ 只弹"收藏没生效"） | 收藏只打 `/api/radio/like`，而这条在**不带客户端姿态**时被风控直接回 `-460`（姿态默认关着）；退路 `window.subscribe` 又是"只要存在就算成功"，而它在内容 iframe 没起来时**静默什么都不做** —— 于是原生那颗 ♡ 从没被真的点到过 | 改成多条官方口径依次试、每条都拿「我喜欢的音乐」的真实状态校验：`/api/v1/radio/like`（实测同一写接口的 v1 路由不是 `-460`）→ `/api/v1/playlist/manipulate/tracks`（网页版「添加到歌单」，pid 指「我喜欢的音乐」）→ `window.subscribe` → 原生 ♡ → 最后才补一次老路由。开关型入口只在「当前状态确实相反」时才动，避免前一条成了又被后一条切回去。（★ v4.10.0 又把顺序与校验重做了一遍，见上一节） |
 | 歌手页**只有热门 50 首**，看不到全部歌曲和专辑 | 只调了 `/api/artist/top/song` —— 那就是站点的「热门 50 首」 | 歌手详情加了「全部歌曲 / 专辑」两个页签：`/api/v1/artist/songs?id=&order=time&limit=&offset=`（带 `more`/`total`，可翻页）与 `/api/artist/albums/<id>`（可翻页）；详情带栈，歌手 → 专辑 → 「返回」回歌手页 |
 | **部分歌单不显示封面** | 约 13% 的歌单封面是站点服务端**合成**出来的：URL 自带 `?imageView=1&thumbnail=800y800&…&watermark&…`（底图是模糊占位，真封面当 watermark 合上去）。脚本一律拼 `&param=WxH`，而合成 URL **会忽略** `param` —— 列表里每次都去下 800×800 大图（实测单张 0.5~1.1 MB），慢到看着就是"没有封面" | `pic()` 认出合成 URL，把尺寸追加到 ops 链**末尾**（实测 1.1 MB → 180 KB，图还是那张对的；整串 query 不能丢，改前面的 `thumbnail` 反而会把合成弄丢）。另外所有封面都带 `data-nm3raw` 兜底：加载失败先退回站点原图、再换占位图，不留破图/空白 |
 
@@ -77,6 +94,8 @@ const CONFIG = {
 
 一个 Tampermonkey 用户脚本，把 `music.163.com` 重做成一个深蓝夜色的四页签播放器。
 
+v4.11.0 起自带**三套皮肤**：原来那套深蓝夜色（默认）和两套照着《明日方舟》莱茵生命终端做的「晨雾」「月影」，页头右侧按钮一键循环切换，详见[第一节](#一配色与皮肤)。
+
 | 页签 | 内容 |
 | --- | --- |
 | **听歌** | 大封面 + 歌曲信息；**可点击可拖拽的进度条**；右栏 `歌词 / 评论` 双页签 —— 歌词**时间轴同步**（翻译 / 罗马音 / 逐字点亮）、悬停放大、点击跳转到该句时间，评论含热评/最新/楼中楼/点赞数；右上角**音质选择** |
@@ -88,7 +107,21 @@ const CONFIG = {
 
 ---
 
-## 一、配色
+## 一、配色与皮肤
+
+脚本自带三套皮肤。页头右上角那颗按钮循环切换，选择存在 `localStorage` 的 `nm3.skin`，刷新后保持；**默认还是原来那套深蓝夜色**，不点它就跟以前一模一样。
+
+| 皮肤 | 一句话 | 主色 |
+| --- | --- | --- |
+| **原皮 · 深蓝夜色**（默认） | 一直以来的那套，深蓝底 + 亮蓝强调 | `#141521` / `#4EA4EF` |
+| **莱茵生命 · 晨雾** | 暖白纸面 + 黑墨 + 信号橙，像一张档案纸 | `#EFEAE1` / `#1B1A18` / `#C2571F` |
+| **莱茵生命 · 月影** | 深蓝夜色 + 冷白 + 信号橙，同一套骨架的夜班版 | `#0F1116` / `#E7E9EC` / `#E4692A` |
+
+![莱茵生命 · 晨雾](e2e/skin-rhine-day.png)
+
+![莱茵生命 · 月影](e2e/skin-rhine-night.png)
+
+### 原皮：深蓝夜色（默认）
 
 按要求使用给定主色：
 
@@ -110,6 +143,43 @@ const CONFIG = {
 - **暖棕 `#937562`** —— 「最热」评论分组、评论楼中楼边线、「红心」标签、音质菜单里的 `VIP` 标。和蓝色系形成冷暖对比，避免整屏发蓝。
 
 播放条是雪碧图画的，CSS 改不了它的颜色，所以在 `.m-playbar::before` 压了一层 `rgba(20,21,33,.46→.62)` 的深蓝渐变，把这块中性深灰拉回调色板；这层 `z-index: 0`，站点自己的 `.wrap`（`z-index: 15`）和 `.updn`（`z-index: 11`）仍然在它上面，不会盖住控件。
+
+### 莱茵生命（晨雾 / 月影）
+
+参考两个项目做的：
+
+- [LBEILC/RhineLabUI](https://github.com/LBEILC/RhineLabUI) —— 《明日方舟》莱茵生命「终端」的复刻件。取的是它的**语言**而不是它的代码：白纸 / 黑墨 / 信号橙、等宽字距、细描边、直角、扫描线、`RHINE` 标识。
+- [RonaldDeng/Rhine-Music-Demo](https://github.com/RonaldDeng/Rhine-Music-Demo) —— 把本地音乐放进三维专辑架的播放器，本身也是照着 RhineLabUI 做的。取的是它的**两套主题思路**：同一套骨架给「晨雾」（暖灰浅色）和「月影」（深蓝冷白）各出一版，所以我这里也是 `rhine-day` / `rhine-night` 一对。
+
+具体做了什么：
+
+| 位置 | 原皮 | 莱茵生命 |
+| --- | --- | --- |
+| 页头 | 深蓝底、圆角页签、辉光下划线 | 纸面/夜色 + 直角页签 + 2px 信号橙短线，品牌名后接 `/ RHINE` 等宽标 |
+| 听歌页背景 | 封面模糊铺底 | **蓝图网格 + 横向扫描线**（两套都是），封面模糊整层关掉 —— 试过留着，暖色封面会把纸面和夜色都染成脏粉/脏红 |
+| 卡片 / 封面 | 12px 圆角 + 投影 | 直角 + 细描边 + 左侧档案脊 |
+| 按钮 / 分段控件 / 药丸 | 圆角、玻璃感 | 直角、硬边、去掉模糊 |
+| 进度条 | 圆头轨道 | 7px 深的「磁带」槽 + 每 15px 一格刻度，笔尖指针全是直角 |
+| 详情头（歌手/专辑/歌单） | 一条分隔线 | 扫描线 + 底边一小段信号橙 |
+
+三套皮肤共用同一份 HTML 和同一套 CSS 变量（`--nm3-bg / card / accent / fg / hrgb / …`），皮肤层只做两件事：**换变量值** + 加**只在该皮肤下生效的装饰规则**（`html[data-nm3-skin^="rhine"] …`）。所以：
+
+- 原皮那套 CSS 一行没删，`data-nm3-skin` 不存在时它就是原来的样子（有测试盯着这条）；
+- 新增皮肤不会碰原皮的任何像素，也不用复制粘贴整份样式。
+
+### 为什么不是「只改几个颜色变量」
+
+原皮里大量颜色是**写死的** `rgba(218,226,237,.x)`（浅蓝灰）和 `rgba(78,164,239,.x)`（亮蓝），只换 `--nm3-*` 那十几个变量会得到「白底 + 白字」。所以 v4.11.0 先把这些硬编码逐个换成**语义化颜色变量**：
+
+| 新变量 | 语义 | 原皮取值（和改造前逐字相同） | 莱茵晨雾 |
+| --- | --- | --- | --- |
+| `--nm3-solid` / `--nm3-solid-fg` | 「深色实底块 + 上面的字」（分段控件选中、搜索按钮、主按钮） | `#2D3C81` / `#DAE2ED` | `#1B1A18` / `#F8F5EF` |
+| `--nm3-handle` / `--nm3-knob` | 进度条填充头、滑块圆点 | `#4EA4EF` / `#141521` | `#C2571F` / `#FFFFFF` |
+| `--nm3-channel-rgb` | 进度条 / 音量条的「未播放槽」 | `0,0,0`（纯黑） | `27,26,24` |
+| `--nm3-hi` | 进度气泡的尖角 | `#1D2742` | `#F1D3B4` |
+| `--nm3-hero-a/b`、`--nm3-bar-grad` | 头图渐变、页头渐变 | `#181A2B`/`#20243A`、`#141521` | `#F4EFE5`/`#E6DECF`、`#F2EDE3` |
+
+改造是**等价替换**：原皮取到的每一个色值都和改造前一模一样（`0,0,0` 的槽色、`#4EA4EF` 的圆头都没变），换皮肤的开关只是给 `<html>` 加一个 `data-nm3-skin` 属性。
 
 ---
 
@@ -377,8 +447,8 @@ GET /api/comment/music?id=…     HTTP 200  {"code":404,"message":"接口未找�
 | 专辑 / 歌手 | `GET /api/album/<id>` / `GET /api/v1/artist/<id>`（名字 / 头像 / 简介）+ `GET /api/artist/top/song?id=`（热门 50 首兜底） |
 | 歌手全部歌曲 | `GET /api/v1/artist/songs?id=&order=time&limit=&offset=` → `{songs, more, total}` | 实测 `order=time`/`hot` 都行、`offset` 有效（周杰伦 `total=566`） |
 | 歌手专辑 | `GET /api/artist/albums/<id>?limit=&offset=` → `{hotAlbums, more, artist}` | ★ `/api/v1/artist/albums/…` 是 404，别用 v1 |
-| 收藏（默认走这条） | `POST /api/v1/radio/like`：`alg=itembased&trackId=&like=&time=3&csrf_token=` | 与 `/api/radio/like` 同一个写接口，但**不带客户端姿态也回 301**（老路由回 `-460`） |
-| 收藏（官方「添加到歌单」） | `POST /api/v1/playlist/manipulate/tracks`：`op=add|del&pid=「我喜欢的音乐」&trackIds=[id]&imme=true` | 「我喜欢的音乐」就是 `specialType: 5` 的歌单；同样不用客户端姿态 |
+| 收藏（默认走这条，站点红心也是它） | `POST /api/v1/playlist/manipulate/tracks`：`op=add|del&pid=「我喜欢的音乐」&trackIds=[id]&imme=true` | 「我喜欢的音乐」就是 `specialType: 5` 的歌单；翻线上包可见播放器的 `track_playlist-add` 打的就是这条。`502`=歌曲已存在、`521`=需绑定手机号 |
+| 收藏（退路） | `POST /api/v1/radio/like`：`alg=itembased&trackId=&like=&time=3&csrf_token=` | 与 `/api/radio/like` 同一个写接口，但**不带客户端姿态也回 301**（老路由回 `-460`） |
 | 歌曲详情 | `GET /api/song/detail?ids=[…]` |
 
 一个关键取舍：`/api/likelist`（拿红心歌曲 id）是 404，所以「没有在播的歌时挑种子」改成读「我喜欢的音乐」歌单的 `trackIds`；这样少一个不可靠的依赖。
@@ -441,30 +511,34 @@ GET /api/comment/music?id=…     HTTP 200  {"code":404,"message":"接口未找�
 
 ### 收藏（红心）
 
-> **v4.9.0 重写了这一段。** 旧逻辑是「先打 `/api/radio/like` → 不成再退 `window.subscribe`」，而
-> `/api/radio/like` 在**不带客户端姿态**（也就是默认设置）时会被风控直接回 `-460`，`window.subscribe`
-> 又是"只要存在就被当成成功"（它在内容 iframe 没起来时静默什么都不做）—— 结果就是**收藏新歌没反应**。
-> 现在改成「多条官方口径依次试 + 每条都拿真实状态校验」。
+> **v4.10.0 又重写了这一段。** v4.9.0 的思路没错（多条口径 + 状态校验），但三个细节致命：
+> ① 首选是 `/api/radio/like`，而**现在的站点对歌曲根本不用它**（线上包里搜不到这条写接口，
+> 红心走 `playlist/manipulate/tracks`），于是每次都先白挨一次 `-460`；
+> ② 校验只等一次 900ms，歌单详情的 CDN 还没刷过来就判了死刑，明明写成功了也报"没生效"；
+> ③ 状态读不回来时把 `code === 200` 当成功，**任何空壳路由都能骗出"已收藏"**。
+> 现在的顺序、校验、成功判定都按线上实现改了。
 
-0. 未登录直接提示登录（不再白打一串写接口）；每条口径之间都会重拉一次真实状态，**只有状态真的变了才算成功**。
-1. 判断当前是不是已收藏：`/api/user/playlist` 里找 `specialType: 5`（我喜欢的音乐），再取 `/api/v6/playlist/detail` 的 `trackIds`；`trackIds` 为空时退回 `tracks`（少数接口版本会这样）。这份集合也顺手当 `pid` 用于第 3 条。
-2. **`POST /api/v1/radio/like`**（默认走这条）：参数与老路由完全一样 —— `alg=itembased`、`trackId`、`like`、`time=3`（★ 是**写死的字符串 `3`**，不是毫秒时间戳）、`csrf_token`；**`like` 只有字符串 `'false'` 才算取消**，其它任何值都当收藏。★ 实测：老路由 `/api/radio/like` 不带客户端姿态回 `-460`，而这条 v1 路由回的是正常的 `301`（未登录）—— 说明风控只挂在老路由上，所以默认开关下它是收藏最靠谱的一条。
-3. **`POST /api/v1/playlist/manipulate/tracks`**（网页版「添加到歌单」那条官方接口）：`op=add|del`、`pid=「我喜欢的音乐」的 id`、`trackIds=[歌曲id]`、`imme=true`。因为「我喜欢的音乐」本身就是一张 `specialType: 5` 的歌单，加/删它就等于收藏/取消收藏；实测同样不需要客户端姿态。
+0. 未登录直接提示登录（不再白打一串写接口）；每条口径之间都会重拉真实状态，**只有状态真的变了才算成功**。
+1. 判断当前是不是已收藏：`/api/user/playlist` 里找 `specialType: 5`（我喜欢的音乐），再取 `/api/v6/playlist/detail` 的 `trackIds`；`trackIds` 为空时退回 `tracks`（少数接口版本会这样）。这份集合也顺手当 `pid` 用于第 2 条。读取都带 `timestamp`，避免 CDN 给旧歌单。
+2. **`POST /api/v1/playlist/manipulate/tracks`（默认走这条，站点红心真正用的就是它）**：`op=add|del`、`pid=「我喜欢的音乐」的 id`、`trackIds=[歌曲id]`、`imme=true`。翻线上包可见播放器的红心按钮 `track_playlist-add` 打的就是这个路由；`502` 表示"歌曲已存在"，`521` 表示"绑定手机号后才可操作"。
+3. **`POST /api/v1/radio/like`**（退路）：参数与老路由完全一样 —— `alg=itembased`、`trackId`、`like`、`time=3`（★ 是**写死的字符串 `3`**，不是毫秒时间戳）、`csrf_token`；**`like` 只有字符串 `'false'` 才算取消**，其它任何值都当收藏。★ 实测：老路由 `/api/radio/like` 不带客户端姿态回 `-460`，而这条 v1 路由回的是正常的 `301`（未登录）。
 4. **站点自己的入口**：`window.subscribe(track, isProgram)` → 它静默无效时再点播放条那颗原生 ♡。★ 这两个都是**开关**（点一下切换），所以只在「当前状态确实与目标相反」时才动，而且每条之间都重读状态 —— 否则第 2 条成功了、第 4 条又把它切回去。状态读不回来时宁可不点，也不拿站点的开关去赌。
-5. 客户端姿态开着时，第 2 条会先走老路由 `/api/radio/like`（那条实测带姿态才通）；姿态关着时把它放在最后补一次（万一这个网络没被风控）。
-6. 服务端明确回 `200` 但状态一时核不上时（账号接口被限制之类）会如实标注「服务端 200，状态没核上」，不假装成普通成功。
-7. 全都不成才说失败，并且挑一个**最有信息量**的 code 说人话（`-460` 比"静默无效那条的 200"更值得报）：`301` 未登录、`400` 参数问题、`-460/-462` 风控、`404` 接口变了。
+5. 客户端姿态开着时，第 3 条会排到前面走老路由 `/api/radio/like`（那条带姿态才通）；姿态关着时把它放在最后补一次（万一这个网络没被风控）。
+6. **校验会等**：每条写成功后按 `0.7s → 1.5s → 2.6s` 重读「我喜欢的音乐」，任一次读到目标状态就算成（歌单详情走 CDN，一次 900ms 往往还是旧的）。成功后本地集合立刻更新，红心当场变，不用等下一轮轮询。
+7. 服务端明确回 `200` 但状态读不回来时（账号接口被限制之类）**不冒充成功**：提示"收藏请求已提交，请刷新确认"。
+8. 全都不成才说失败，并且挑一个**最有信息量**的 code 说人话（`-460` 比"静默无效那条的 200"更值得报）：`301` 未登录、`400` 参数问题、`-460/-462` 风控、`404` 接口变了。
+9. 收藏集合读取失败（`likedSet === false`）不再"一辈子不亮"：20 秒后重试；跨 tick 的并发读取合并成同一个 pending，不拿半截状态（否则"取消收藏"会被误判成"收藏"）。
 
-> 为什么不能只调 `window.subscribe`：`core.js` 里它是 `if (bJ6O.nm && bJ6O.nm.x) { … }` —— 内容 iframe 还没起来、或顶层 `window.GUser` 还没写进来时，它**什么都不做也不报错**。旧代码把"函数存在"当成成功，于是原生按钮这条退路从来没真的走过；现在每条口径都靠状态校验判生死。
+> 为什么不能只调 `window.subscribe`：线上 `core.js` 里它是 `if (bJ6O.nm && bJ6O.nm.x) { … }` —— 内容 iframe 还没起来、或顶层 `window.GUser` 还没写进来时，它**什么都不做也不报错**。旧代码把"函数存在"当成成功，于是原生按钮这条退路从来没真的走过；现在每条口径都靠状态校验判生死。
 
 ### 出问题怎么反馈
 
 写操作都会往控制台打 `[云音乐·精简版]` 日志，并同时记进 `window.__nm3LikeLog`（最近 20 条：时间、接口、参数、服务端返回的 `code` / `message`）。F12 里执行 `copy(window.__nm3LikeLog)` 就能把原话贴出来 —— 有它就能一眼看出是没登录、被风控，还是接口变了。
 
 > **诚实说明**：写操作要**登录态**才能对着真站点验证，本机做不到（只能验证到「未登录回 `301`」这一层）。
-> 但 v4.9.0 起有了 `e2e/` 那套「真实浏览器 + 模拟站点」冒烟测试：把 `/api/radio/like` 故意配成回 `-460`，
-> 脚本仍然靠 `/api/v1/radio/like` 把歌收进「我喜欢的音乐」，toast 是「已收藏到「我喜欢的音乐」」——
-> 也就是说**兜底链路本身是端到端跑通过的**，只是每条路由在真账号下的返回码仍需你自己那台机器确认。
+> 但 v4.10.0 起有 `e2e/` 那套「真实浏览器 + 模拟站点」冒烟测试：把 `/api/radio/like` 故意配成回 `-460`，
+> 脚本仍然靠 `/api/v1/playlist/manipulate/tracks` 把歌收进「我喜欢的音乐」，toast 是「已收藏到「我喜欢的音乐」」——
+> 也就是说**这条链路本身是端到端跑通过的**，只是每条路由在真账号下的返回码仍需你自己那台机器确认。
 > 真出问题时，控制台 / `__nm3LikeLog` 里的 `code` 就是答案。
 
 ---
@@ -480,11 +554,11 @@ GET /api/comment/music?id=…     HTTP 200  {"code":404,"message":"接口未找�
 - **搜索只做四类**（单曲/歌手/专辑/歌单），没有 MV、电台、歌词、用户。这是刻意的取舍。
 - **单个歌单最多读 1000 首**（`CONFIG.MAX_PLAYLIST_TRACKS`）。
 - **下载重定向到「音乐」文件夹只在 Chromium 系浏览器（Chrome / Edge / Brave）有效。** 它靠 File System Access API；Firefox / Safari 没有这个 API，脚本会如实退回浏览器默认下载目录，不做任何假装成功的提示。另外文件夹句柄的授权在部分浏览器里每个会话都要续一次（一次点击触发的小气泡，不是重新选文件夹）。
-- **点赞 / 收藏这类写操作需要登录，而且可能被风控。** 未登录服务端回 `301`（HTTP 仍然是 200）；被判定网络环境有风险回 `-460 / -462` —— 脚本无法绕过风控，只会如实说明（官方给的绕过办法只有换国内出口 IP）。★ 实测：老路由 `/api/radio/like` 不带客户端姿态直接回 `-460`，而 `/api/v1/radio/like` 回的是正常的 `301`，所以**默认设置下收藏走的是 v1 那条**，不再依赖 `ALLOW_CLIENT_SPOOF`；万一连 v1 也被风控，脚本会如实说出 `-460`，而不是假装成功。
+- **点赞 / 收藏这类写操作需要登录，而且可能被风控。** 未登录服务端回 `301`（HTTP 仍然是 200）；被判定网络环境有风险回 `-460 / -462` —— 脚本无法绕过风控，只会如实说明（官方给的绕过办法只有换国内出口 IP）。★ 实测：老路由 `/api/radio/like` 不带客户端姿态直接回 `-460`，而 `/api/v1/radio/like` 回的是正常的 `301`。v4.10.0 起**默认设置下收藏走 `/api/v1/playlist/manipulate/tracks`**（站点红心自己用的那条），不再依赖 `ALLOW_CLIENT_SPOOF`；万一都被风控，脚本会如实说出 `-460`，而不是假装成功。
 - **关掉 `ALLOW_CLIENT_SPOOF` 的连带影响**：不做"救场"，所以「客户端能听、网页不给听」那类内容不会再被脚本接管；音质选择（改写 `level`）不受影响，站点本身的播放也不受影响。
 - **关掉 `ALLOW_DOWNLOAD` 时控制台上没有下载按钮**，这是默认状态；从控制台手动调 `downloadCurrent()` 也只会提示去开开关。
 - **逐字歌词（`yrc`）只有部分歌曲有**，而且要请求带 `yv=-1` 才返回；没有就退化成整行高亮（功能不受影响）。罗马音（`romalrc`）同样不是每首都存在。
-- **本脚本没有对着真实站点跑过完整流程**（需要登录态），但 v4.9.0 起在**真实浏览器 + 模拟站点**下端到端跑过一遍（`e2e/`），见下方"验证情况"。
+- **本脚本没有对着真实站点跑过完整流程**（需要登录态），但 v4.10.0 起在**真实浏览器 + 模拟站点**下端到端跑过一遍（`e2e/`），见下方"验证情况"。
 
 ---
 
@@ -504,10 +578,12 @@ GET /api/comment/music?id=…     HTTP 200  {"code":404,"message":"接口未找�
 - **播放条适配测试**：按 11 种视口宽度（2560 原生 ~ 2.5K@320%）实测计算缩放与左边缘，验证窄屏按钮从屏幕外被拉回可见区（左边缘恒 >= 33px、按钮右边界不越界），且宽屏 `transform` 为空字符串（完全不动站点布局）。
 - **封面 / 播放 / 音质回归测试**：`pic()` 把 `http://` 升成 `https://`（含已有 query 时用 `&` 拼接）；`trackInfo()` 在队列对象缺 `album`/`artists` 时用 `/api/song/detail` 补齐、队列自带信息优先、id 不匹配不串用；`playList()` **只调一次** `addTo` 且把目标曲排到队首（`[3,4,1,2]`）、index=0 顺序不变、越界回落、空列表不炸；播放条显示 `00:00 / 00:00` 时时长兜底到歌曲元数据而不是返回 0；音质 `error` 保险丝把档位降回 `exhigh` 且保留用户偏好。
 - **下载位置重定向（音乐文件夹）**：把脚本里那段原样抽出来，用桩 `showDirectoryPicker` / `indexedDB` / 目录句柄跑了 6 组流程测试 —— 无 FSA 直接退回默认目录、选一次后静默复用（不再弹框）、权限 `prompt`→`granted` 续期、`denied` 或句柄失效后重选、取消后不再纠缠（Shift 点击可重选）、同名自动改名 `(2)`、写失败删掉半截文件、`DOWNLOAD_SUBDIR` 按需建子文件夹 —— 全部通过。
-- **歌词 + 点赞/收藏回归测试**（`node netease-music-lite.lyric-like.test.cjs`，14 组）：把歌词段与点赞/收藏段原样抽出来跑桩 —— LRC 多时间戳 / `[offset:]` / 元数据行、`yrc` 逐字解析（真实片段）、翻译与罗马音挂行（行数一致按序、不一致按 ±1 秒就近、对不上就丢）、分组渲染（主 + 译 + 罗同组）、当前组一起点亮、逐字随播放点亮且往回拖会重置、双语 `.lrc` 文本（原文与翻译同时间戳）；评论点赞走 `/like`、取消走 `/unlike`、换口径重试、`301/400/-460` 各自的提示语；**收藏**：三条官方口径（`/api/radio/like`、`/api/v1/radio/like`、`/api/v1/playlist/manipulate/tracks`）的路径与参数、`like=false`/`op=del` 才是取消、姿态开关开着才带 `os=pc`、老路由回 `-460` 时自动换口径并成功、`subscribe`「存在但静默无效」时必须继续点原生 ♡、几条都不成才报失败（且优先报 `-460` 而不是"静默 200"）、未登录直接提示登录且不发写请求、`trackIds` 空时退回 `tracks`。
+- **歌词 + 点赞/收藏回归测试**（`node netease-music-lite.lyric-like.test.cjs`，15 组）：把歌词段与点赞/收藏段原样抽出来跑桩 —— LRC 多时间戳 / `[offset:]` / 元数据行、`yrc` 逐字解析（真实片段）、翻译与罗马音挂行（行数一致按序、不一致按 ±1 秒就近、对不上就丢）、分组渲染（主 + 译 + 罗同组）、当前组一起点亮、逐字随播放点亮且往回拖会重置、双语 `.lrc` 文本（原文与翻译同时间戳）；评论点赞走 `/like`、取消走 `/unlike`、换口径重试、`301/400/-460` 各自的提示语；**收藏**：三条官方口径（`/api/v1/playlist/manipulate/tracks`、`/api/v1/radio/like`、`/api/radio/like`）的路径与参数、`like=false`/`op=del` 才是取消、姿态开关开着才带 `os=pc`、老路由回 `-460` 时自动换口径并成功、`subscribe`「存在但静默无效」时必须继续点原生 ♡、几条都不成才报失败（且优先报 `-460` 而不是"静默 200"）、未登录直接提示登录且不发写请求、`trackIds` 空时退回 `tracks`；**v4.10.0 新增（`ok 11b`）**：写成功但歌单详情被 CDN 缓存时要重试到看见变化（否则成功也报失败）、服务端 `200` 但状态读不回来时只能说"已提交"、并发读「我喜欢的音乐」要合并成一次而不是各读半截。
 - **封面 / 点行播放 / 歌手详情回归测试**（`node netease-music-lite.cover-artist.test.cjs`，9 组）：`pic()` 对**合成封面**要把尺寸追加到 ops 链末尾、整串 query（含 watermark 的 base64）不能丢、已有 `param=` 要改写不能叠加；`imgHtml()` 带 `data-nm3raw`、转义正确；`onCoverError()` 先退回站点原图、再换占位图、不循环；`trackListHtml` 的 `data-list` 与数组登记；`playTrackAt`/`onPanelClick` **搜索行只播搜索结果**（回归那个 bug）；歌手详情 `loadArtistMore`/`setArtistTab` 的翻页累加与 `more` 收敛、专辑页签懒加载；详情栈「歌手 → 专辑 → 返回」；`detailHtml()` 真的渲染出页签 / 全部歌曲 / 专辑栅格 / 加载更多（并检查标签闭合）。
 - **开关 + 免责声明测试**（`node netease-music-lite.switches.test.cjs`，6 组）：把客户端姿态那段原样抽出来跑桩 —— **默认值必须是 `false`**（源码级断言，防止有人改回开启）；关着时不写任何 cookie、URL 不追加 `os/appver/…`、取流请求不带客户端字段、救场连音频元素都不碰；打开后三处都补齐（证明开关真的有效而非死代码）；`downloadAllowed()` 取值、下载按钮的条件渲染、`downloadCurrent()` 开头的兜底拦截、`DOWNLOAD_LRC` 独立判断；脚本头部免责声明关键词（个人学习 / 严禁商业用途 / 不绕过付费 / 24 小时内删除 / 服务条款 / 两个开关 / 现状）与 `@description` 里的"仅供个人学习研究""默认关闭"。（"开关关着时写接口不带 `os=pc`"这一条在 lyric-like 那套的第 10 组里。）
-- **端到端冒烟测试（真实浏览器 + 模拟站点，`e2e/`）**：`node e2e/server.cjs` 起一个迷你静态服务器，用 Chrome/Edge 无头模式打开 `mock.html`，由一段驱动脚本**像用户那样点**（搜索、点第 2 行、切歌手、加载更多、切专辑、点专辑、返回、点 ♡），最后把结论打进页面。`fetch` 被换成桩并**故意让 `/api/radio/like` 回 `-460`**，复现用户那边"收藏没用"的环境。最近一次结果：`RESULT OK jsErrors=[]`，`clickRow2=搜索第二首`，`tabs=["全部歌曲106","专辑"]`，`songs=50 more=true afterMore=100/true albums=30`，`albumCoverEndsWith300y300=true keepsWatermark=true`，`back: isArtist=true`，`LIKE toast=[已收藏到「我喜欢的音乐」] writes=["/api/v1/radio/like?like=true"]`，`coverFallback changed=true`。截图存在 `e2e/artist-page.png`。
+- **端到端冒烟测试（真实浏览器 + 模拟站点，`e2e/`）**：`node e2e/server.cjs` 起一个迷你静态服务器，用 Chrome/Edge 无头模式打开 `mock.html`，由一段驱动脚本**像用户那样点**（搜索、点第 2 行、切歌手、加载更多、切专辑、点专辑、返回、点 ♡），最后把结论打进页面。`fetch` 被换成桩并**故意让 `/api/radio/like` 回 `-460`**，复现用户那边"收藏没用"的环境。最近一次结果：`RESULT OK jsErrors=[]`，`clickRow2=搜索第二首`，`tabs=["全部歌曲106","专辑"]`，`songs=50 more=true afterMore=100/true albums=30`，`albumCoverEndsWith300y300=true keepsWatermark=true`，`back: isArtist=true`，`LIKE toast=[已收藏到「我喜欢的音乐」] writes=["/api/v1/playlist/manipulate/tracks?op=add"]`，`coverFallback changed=true`。，最后新加一步**连点三下皮肤按钮**：`skin cycle=["ink","rhine-day","rhine-night","ink"] accents=["#4EA4EF","#C2571F","#E4692A","#4EA4EF"] chip=原皮`（连 `<html>` 上真取到的主色都跟着变，不是只改了属性）。截图存在 `e2e/artist-page.png`（原皮）、`e2e/skin-rhine-day.png`、`e2e/skin-rhine-night.png`；加 `?skin=rhine-day` 可直接进对应皮肤。
+- **皮肤回归测试**（`node netease-music-lite.skin.test.cjs`，9 组）：把真实的皮肤代码段原样抽出来跑桩 —— 三套皮肤都注册了（chip 文案 `原皮`/`晨雾`/`月影`）；默认原皮且**不给 `<html>` 挂属性**（CSS 靠"属性缺失 = 原皮"）；循环切换 `原皮 → 晨雾 → 月影 → 原皮` 并写进 `localStorage`、切回原皮要摘属性；预置 `nm3.skin=rhine-night` 时启动即挂属性（不闪一帧原皮）；非法存值回落原皮；按钮文案与 `title` 跟着皮肤走；`document-start` 阶段**还没有 `<html>`** 时不抛错、等 `DOMContentLoaded` 补挂；样式层两套莱茵皮肤变量齐全、`SKIN_CSS` 里**不含任何原皮色**（抄进来就等于"换了皮肤还是蓝的"）、装饰规则全部带 `html[data-nm3-skin^="rhine"]` 前缀；接线四处都在（按钮、点击、注入 `SKIN_CSS`、启动 `applySkin()`）。
+- **线上包实测（v4.10.0，红心的根因证据）**：从 `music.163.com` 拉下现在线上的三个包 —— `core_c7686f50….js`（699 KB，播放器/队列）、`pt_frame_index_….js`（209 KB，框架）、`discover_….js`（33 KB，首页推荐）—— 逐个扫接口名：**`/api/radio` 一次都没出现**，也没有 `window.subscribe`；写"喜欢"的只有 `/api/resource/like` / `/api/resource/unlike`（用于 `A_DJ_1_<id>` 这类节目 threadId 和评论），而**歌曲红心**走的是 `playlist/manipulate/tracks`（`data.op: add` / `del`、`trackIds` 整串 JSON、错误码 `502`=歌曲已存在、`505`=歌单已满、`521`=需绑定手机号）。★ 结论：对"歌曲"而言老路由 `/api/radio/like` 已经不是站点在用的收藏接口，`/api/v1/radio/like` 只是它的 v1 路由（可用，但不是官方现路），所以 v4.10.0 把它挪到 `/api/v1/playlist/manipulate/tracks` 之后。
 - **写操作的线上实测（未登录，只读探测；v4.9.0 复测）**：`/api/v1/comment/like` 与 `/api/v1/comment/unlike` 都在（回 `301`），裸 `threadId` 回 `400 illegal resourceId!`，假路由回 `404`；`/api/radio/like` 回 `-460`（风控）—— ★ 这次**带上 `os=pc; appver; channel; osver` 这套 cookie 也照样回 `-460`**，说明风控还看出口 IP，作者当初"带姿态就回 301"的结论不是所有环境都成立；`/api/v1/radio/like`、`/api/v1/playlist/manipulate/tracks`（`op=add&pid=…&trackIds=[…]`）、`/api/v1/artist/songs`、`/api/artist/albums/<id>` 都回正常的 `301`（即认证层，能到就会在登录后生效），`/api/v1/artist/albums/…` 与 `/api/v1/song/like` 回 `404`；`/api/song/lyric/v1` 一次拿回 `lrc` + `tlyric` + `romalrc`（Lemon，1761 / 969 / 2190 字节）。★ 带登录态的**写入结果**本机验不了，见上一条"诚实说明"。
 - **封面 URL 形态实测**：抽了 720 个搜索结果的歌单封面 —— 全部是 `http://p1.music.126.net/…jpg`（要升级 https），其中 **92 个（12.8%）**自带 `?imageView=1&thumbnail=800y800&…&watermark&…` 的合成 query，且**全部**以 `%7CimageView=1` 收尾；`&param=`/`thumbnail=`（不在 imageView 里）这两种情况在这批数据里是 0 个。curl 实测：合成 URL 直接加 `&param=300y300` 大小不变（被忽略，最大 1.1 MB），把 `thumbnail=300y300` 追加到末尾后降到 180 KB；把整串 query 丢掉只剩模糊底图（截图确认）。
 - **渲染**：用极简 DOM 桩**真正执行**了全部渲染函数，48 项检查全部通过且 HTML 标签完全闭合：
@@ -527,8 +603,8 @@ GET /api/comment/music?id=…     HTTP 200  {"code":404,"message":"接口未找�
 
 未验证（需要你在浏览器里实际跑一次）：
 
+- 三套皮肤在你**自己的显示器**上的观感 —— 我在无头 Edge 里把听歌页 / 列表页 / 详情页 / 三套皮肤都截图比过（见 `e2e/` 里那三张），但色域、缩放、深色模式跟随（`color-scheme`）只有真机才准；
 - 四个页签的实际观感与像素级定位，尤其播放条那层深蓝叠加、歌词悬停缩放的观感；
-- **音质切换的真实效果** —— 端到端只有浏览器里才能验（要登录态，且高音质要会员）；
 - **点赞 / 收藏的写入结果** —— 要登录态，本机只能验到「未登录回 301」；脚本已经把失败原因和诊断窗口做好了，真出问题时看 `window.__nm3LikeLog`；
 - **歌词的观感** —— 翻译 / 罗马音的行距、当前组放大、逐字点亮的节奏，只有浏览器里看得出好不好看；
 - **下载落进「音乐」文件夹的真实观感** —— 第一次那个目录选择框是否正好开在「音乐」上、授权气泡的频率，只有浏览器里能看；
@@ -563,15 +639,29 @@ const CONFIG = {
 
 其他：#937562 相关的 `PALETTE`、音质档位 `LEVELS`、搜索推荐词 `SEARCH_SUGGEST`。
 
+皮肤相关的两个值也可以手改（在脚本里搜 `SKIN_KEY` / `SKINS`）：
+
+```js
+const SKIN_KEY = 'nm3.skin';   // 记在 localStorage 里的键名
+const SKINS = [                // 顺序就是按钮的循环顺序
+  { id: 'ink',         chip: '原皮', name: '原皮 · 深蓝夜色' },
+  { id: 'rhine-day',   chip: '晨雾', name: '莱茵生命 · 晨雾' },
+  { id: 'rhine-night', chip: '月影', name: '莱茵生命 · 月影' }
+];
+```
+
+想改某一套的颜色，改 `SKIN_CSS` 里对应那段 `html[data-nm3-skin="rhine-day"] { … }` 的变量即可（别在皮肤块里写死具体颜色值，测试会拦）。
+
 ---
 
 ## 文件
 
-- `netease-music-lite.user.js` —— 用户脚本本体（约 5400 行，含完整中文注释与免责声明）
+- `netease-music-lite.user.js` —— 用户脚本本体（约 5900 行，含完整中文注释与免责声明）
 - `netease-music-lite.README.md` —— 本文件
 - `netease-music-lite-安装指南.md` —— 给不写代码的人看的安装 / 使用 / 排错指南
 - `netease-music-lite.download-dir.test.cjs` —— 下载位置（音乐文件夹）那段逻辑的回归测试，`node netease-music-lite.download-dir.test.cjs` 直接跑（见"验证情况"）
 - `netease-music-lite.lyric-like.test.cjs` —— 歌词时间轴（翻译 / 罗马音 / 逐字）+ 评论点赞 / 收藏的回归测试，`node netease-music-lite.lyric-like.test.cjs` 直接跑（见"验证情况"）
 - `netease-music-lite.cover-artist.test.cjs` —— 封面（合成 URL / 兜底）+ 点行播放归属 + 歌手详情（全部歌曲 / 专辑 / 详情栈）的回归测试，`node netease-music-lite.cover-artist.test.cjs` 直接跑（见"验证情况"）
 - `netease-music-lite.switches.test.cjs` —— 免责声明 + 三个默认关闭开关的回归测试，`node netease-music-lite.switches.test.cjs` 直接跑（**把"默认必须关着"钉死**，见"验证情况"）
-- `e2e/` —— 真实浏览器 + 模拟站点的端到端冒烟测试（`node e2e/server.cjs` + 无头 Chrome/Edge，见 `e2e/README.md` 与"验证情况"）
+- `netease-music-lite.skin.test.cjs` —— 三套皮肤（原皮 / 莱茵生命·晨雾 / 月影）的回归测试：切换顺序、记住选择、非法值回落、`document-start` 无 `<html>` 时不炸、样式层不含原皮色，`node netease-music-lite.skin.test.cjs` 直接跑（见"验证情况"）
+- `e2e/` —— 真实浏览器 + 模拟站点的端到端冒烟测试（`node e2e/server.cjs` + 无头 Chrome/Edge，见 `e2e/README.md` 与"验证情况"）；`artist-page.png` / `skin-rhine-day.png` / `skin-rhine-night.png` 是三套皮肤的验收截图

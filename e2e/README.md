@@ -20,6 +20,11 @@ node e2e/server.cjs                      # → http://127.0.0.1:8791/mock.html
 
 截图底部那条深色横条就是测试报告（`RESULT OK  jsErrors=[]` 加各步结论）。
 
+想看某一套皮肤，直接在 URL 上加 `?skin=`：`?skin=rhine-day`（莱茵生命 · 晨雾）、`?skin=rhine-night`
+（月影）、`?skin=ink`（原皮）。它只是在脚本启动**之前**把 `localStorage` 的 `nm3.skin` 写好，
+不走后门、不调内部函数。三张验收截图就是这么拍的：`artist-page.png`（原皮）、
+`skin-rhine-day.png`、`skin-rhine-night.png`。
+
 ## 它模拟了什么
 
 - **站点骨架**：`.g-topbar` / `#g_iframe` / `.g-btmbar > .m-playbar`（含 `data-action` 控件）、
@@ -37,7 +42,12 @@ node e2e/server.cjs                      # → http://127.0.0.1:8791/mock.html
 3. 点「加载更多」→ 100 首；
 4. 切「专辑」→ 30 张卡片、封面 URL 末尾带 `thumbnail=300y300` 且仍保留 `imageView`；
 5. 点一张专辑 → 点「返回」→ 断言回到歌手页（详情栈）；
-6. 点 ♡ → 断言 toast「已收藏到「我喜欢的音乐」」，且写请求走的是 `/api/v1/radio/like`；
-7. 手动把一张封面写成不存在的地址 → 断言 `error` 兜底把它换掉。
+6. 点 ♡ → 断言 toast「已收藏到「我喜欢的音乐」」，且写请求走的是
+   `/api/v1/playlist/manipulate/tracks`（站点红心真正用的那条；老路由 `/api/radio/like`
+   在 mock 里故意回 -460，用来证明不靠它也能成）；
+7. 手动把一张封面写成不存在的地址 → 断言 `error` 兜底把它换掉；
+8. 连点三下页头皮肤按钮 → 断言 `<html>` 的 `data-nm3-skin` 依次是
+   `ink → rhine-day → rhine-night → ink`，**并且**从 CSS 里真取到的 `--nm3-accent` 也跟着变
+   （`#4EA4EF → #C2571F → #E4692A → #4EA4EF`）—— 只改属性不改样式的话这一步会红。
 
 改脚本之后重跑一次，报告里任何一步不对都看得见。
