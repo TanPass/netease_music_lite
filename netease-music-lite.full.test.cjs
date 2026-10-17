@@ -1,9 +1,9 @@
 /* 全功能版构建 —— 回归测试
  *
  * 钉死三件事：
- *   ① 公开版（netease-music-lite.user.js）的三个开关**永远是 false**，
+ *   ① 公开版（netease-music-lite.user.js）的四个开关**永远是 false**，
  *      且 FULL_BUILD 也是 false —— 页头不该有「全功能版」标。
- *   ② tools/build-full.cjs 的生成物里三个开关 + FULL_BUILD 都是 true，
+ *   ② tools/build-full.cjs 的生成物里四个开关 + FULL_BUILD 都是 true，
  *      @name 写明「全功能版」，头部带构建说明，能被 node --check 解析。
  *   ③ 生成是**不破坏性**的：公开版字节不变、连跑两次结果一致（幂等）；
  *      找不到锚点时必须抛错，不能生成一份「看起来像全功能版」的半成品。
@@ -38,13 +38,14 @@ function buildBadge(full) {
 }
 
 function main() {
-  /* ── 1. 公开版：三个开关 + FULL_BUILD 全是 false ── */
+  /* ── 1. 公开版：四个开关 + FULL_BUILD 全是 false ── */
   {
     assert.ok(/ALLOW_CLIENT_SPOOF: false,/.test(lite), '公开版 ALLOW_CLIENT_SPOOF 必须是 false');
     assert.ok(/ALLOW_DOWNLOAD: false,/.test(lite), '公开版 ALLOW_DOWNLOAD 必须是 false');
     assert.ok(/DOWNLOAD_LRC: false,/.test(lite), '公开版 DOWNLOAD_LRC 必须是 false');
+assert.ok(/DOWNLOAD_TAGS: false,/.test(lite), '公开版 DOWNLOAD_TAGS 必须是 false');
     assert.ok(/FULL_BUILD: false/.test(lite), '公开版 FULL_BUILD 必须是 false');
-    console.log('ok 1 公开版：三个开关与 FULL_BUILD 都是 false');
+    console.log('ok 1 公开版：四个开关与 FULL_BUILD 都是 false');
   }
 
   /* ── 2. 公开版页头：没有「全功能版」标，启动也不提示 ── */
@@ -86,6 +87,7 @@ function main() {
     assert.strictEqual(info.spoof, true, '生成物 ALLOW_CLIENT_SPOOF 要 true');
     assert.strictEqual(info.download, true, '生成物 ALLOW_DOWNLOAD 要 true');
     assert.strictEqual(info.lrc, true, '生成物 DOWNLOAD_LRC 要 true');
+assert.strictEqual(info.tags, true, '生成物 DOWNLOAD_TAGS 要 true');
     assert.strictEqual(info.full, true, '生成物 FULL_BUILD 要 true');
     assert.strictEqual(info.banner, true, '生成物要带构建说明');
     assert.ok(/全功能版/.test(info.name), '@name 要写明「全功能版」');

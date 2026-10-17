@@ -1,11 +1,12 @@
 /* 生成「全功能版」：node tools/build-full.cjs
  *
- * 公开仓库里只有 netease-music-lite.user.js —— 三个敏感开关（客户端姿态取流 /
- * 下载 / 附带 .lrc）默认关闭。这一份构建把它们全部打开，并且只在**本机**生成，
- * 不进仓库（.gitignore 里写着），因为「能不能分发」这件事由你自己判断。
+ * 公开仓库里只有 netease-music-lite.user.js —— 四个敏感开关（客户端姿态取流 /
+ * 下载 / 附带 .lrc / 把歌曲信息写进音频文件）默认关闭。这一份构建把它们全部打开，
+ * 并且只在**本机**生成，不进仓库（.gitignore 里写着），因为「能不能分发」这件事
+ * 由你自己判断。
  *
  * 它做的事很少，而且全部是**替换字面量**，不做正则改写源代码：
- *   ① CONFIG 里三个 false → true（找不到就报错，绝不猜）
+ *   ① CONFIG 里四个 false → true（找不到就报错，绝不猜）
  *   ② CONFIG.FULL_BUILD false → true（页头「全功能版」标 + 启动提示）
  *   ③ @name / @description 换成全功能版的说法
  *   ④ 头部插一段构建说明（谁生成的、基于哪一版、什么时候）
@@ -37,10 +38,11 @@ function buildFull(srcText, opts) {
   const builtAt = (opts && opts.builtAt) || '本地构建';
   let out = srcText;
 
-  /* ① 三个敏感开关 */
+  /* ① 四个敏感开关 */
   out = replaceOnce(out, '    ALLOW_CLIENT_SPOOF: false,', '    ALLOW_CLIENT_SPOOF: true,', 'ALLOW_CLIENT_SPOOF');
   out = replaceOnce(out, '    ALLOW_DOWNLOAD: false,', '    ALLOW_DOWNLOAD: true,', 'ALLOW_DOWNLOAD');
   out = replaceOnce(out, '    DOWNLOAD_LRC: false,', '    DOWNLOAD_LRC: true,', 'DOWNLOAD_LRC');
+  out = replaceOnce(out, '    DOWNLOAD_TAGS: false,', '    DOWNLOAD_TAGS: true,', 'DOWNLOAD_TAGS');
 
   /* ② 全功能版标记 */
   out = replaceOnce(out, '    FULL_BUILD: false', '    FULL_BUILD: true', 'FULL_BUILD');
@@ -55,7 +57,7 @@ function buildFull(srcText, opts) {
   out = replaceOnce(
     out,
     '// @description  把网易云音乐网页版重做成深蓝夜色的三页签播放器：',
-    '// @description  【全功能版 · 仅供本机个人使用，请勿分发】在精简版基础上打开了「伪装 PC 客户端姿态取流」「下载音频」「附带 .lrc」三个默认关闭的功能；其余与精简版相同。把网易云音乐网页版重做成三页签播放器：',
+    '// @description  【全功能版 · 仅供本机个人使用，请勿分发】在精简版基础上打开了「伪装 PC 客户端姿态取流」「下载音频」「附带 .lrc」「下载时把歌曲信息写进音频文件」四个默认关闭的功能；其余与精简版相同。把网易云音乐网页版重做成三页签播放器：',
     '@description'
   );
 
@@ -69,11 +71,14 @@ function buildFull(srcText, opts) {
     ' *    ALLOW_CLIENT_SPOOF = true   伪装 PC 客户端姿态取流（含救场播放）',
     ' *    ALLOW_DOWNLOAD     = true   控制台出现下载按钮，可把音频存成本地文件',
     ' *    DOWNLOAD_LRC       = true   下载时顺带写双语 .lrc',
+    ' *    DOWNLOAD_TAGS      = true   下载时把歌手 / 专辑 / 曲序 / 流派 / 添加时间 /',
+    ' *                                专辑封面 / 歌曲封面写进音频文件（ID3v2.3 或',
+    ' *                                FLAC 的 Vorbis Comment + PICTURE）',
     ' *    FULL_BUILD         = true   页头挂「全功能版」标 + 启动提示',
     ' *',
-    ' *  ⚠ 这三样正是权利方最常点名的一类功能，且可能被认定为「避开访问控制',
+    ' *  ⚠ 前三样正是权利方最常点名的一类功能，且可能被认定为「避开访问控制',
     ' *    技术措施」。它**不进公开仓库**、不建议二次分发：自己听、别传给别人。',
-    ' *    公开版（netease-music-lite.user.js）保持三个开关为 false。',
+    ' *    公开版（netease-music-lite.user.js）保持四个开关为 false。',
     ' *',
     ' *  生成时间：' + builtAt,
     ' *  要更新：主脚本改动后重新跑 node tools/build-full.cjs（不要手改这份）',
@@ -101,6 +106,7 @@ function inspect(text) {
     spoof: /ALLOW_CLIENT_SPOOF: true,/.test(text),
     download: /ALLOW_DOWNLOAD: true,/.test(text),
     lrc: /DOWNLOAD_LRC: true,/.test(text),
+    tags: /DOWNLOAD_TAGS: true,/.test(text),
     full: /FULL_BUILD: true/.test(text),
     banner: /这是「全功能版」/.test(text)
   };
@@ -122,8 +128,8 @@ if (require.main === module) {
   console.log('  @name    ' + info.name);
   console.log('  @version ' + info.version);
   console.log('  开关     ALLOW_CLIENT_SPOOF=' + info.spoof + '  ALLOW_DOWNLOAD=' + info.download +
-    '  DOWNLOAD_LRC=' + info.lrc + '  FULL_BUILD=' + info.full);
-  console.log('  ⚠ 仅供本机个人使用；公开仓库里那份（lite）三个开关仍是 false。');
+    '  DOWNLOAD_LRC=' + info.lrc + '  DOWNLOAD_TAGS=' + info.tags + '  FULL_BUILD=' + info.full);
+  console.log('  ⚠ 仅供本机个人使用；公开仓库里那份（lite）四个开关仍是 false。');
 }
 
 module.exports = { buildFull, inspect, OUT, SRC };

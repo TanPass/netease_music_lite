@@ -15,11 +15,11 @@
 
 > 以上文本与脚本头部内置的免责声明一致（脚本第 14~60 行那段注释）。
 
-## 🔒 两个默认关闭的敏感开关（位置 + 打开方法）
+## 🔒 几个默认关闭的敏感开关（位置 + 打开方法）
 
-出于上面第 2、4 条的原因，脚本里最容易踩线的两类功能**默认是关着的**。如果你确认要自己承担后果，按下面的方法打开：
+出于上面第 2、4 条的原因，脚本里最容易踩线的几类功能**默认是关着的**。如果你确认要自己承担后果，按下面的方法打开：
 
-**开关位置：`netease-music-lite.user.js` 里的 `CONFIG`，大约在脚本第 246~276 行**（搜索关键词 `ALLOW_CLIENT_SPOOF` 或 `ALLOW_DOWNLOAD` 最快）：
+**开关位置：`netease-music-lite.user.js` 里的 `CONFIG`，大约在脚本第 246~294 行**（搜索关键词 `ALLOW_CLIENT_SPOOF` 或 `ALLOW_DOWNLOAD` 最快）：
 
 ```js
 const CONFIG = {
@@ -35,7 +35,13 @@ const CONFIG = {
   // ③ 下载时顺带写双语 .lrc（带时间轴的歌词文件，只在上一条打开时有效）
   DOWNLOAD_LRC: false,         // ← 想连歌词文件一起存，再改成 true
 
-  DOWNLOAD_SUBDIR: ''          // 想再套一层子文件夹就填名字，例如 '网易云音乐'
+  DOWNLOAD_SUBDIR: '',         // 想再套一层子文件夹就填名字，例如 '网易云音乐'
+
+  // ④ 下载时把歌曲信息写进音频文件（歌手 / 专辑 / 曲序 / 流派 / 添加时间 / 封面）
+  DOWNLOAD_TAGS: false,        // ← 想「属性 → 详细信息」里能看到歌名歌手，再改成 true
+
+  // ④-2 流派写死值（接口不给曲风字段，留空就只在歌单/专辑带 tags 时才写）
+  TAG_GENRE: ''
 };
 ```
 
@@ -43,7 +49,7 @@ const CONFIG = {
 
 1. 点浏览器工具栏的 Tampermonkey 图标 → **管理面板** → 找到「网易云音乐 · 精简版」→ 点**编辑**（铅笔图标）；
 2. `Ctrl+F` 搜 `ALLOW_DOWNLOAD`，把 `false` 改成 `true`；
-3. 想同时保存歌词文件，再把下面的 `DOWNLOAD_LRC` 也改成 `true`；想要客户端姿态救场，把 `ALLOW_CLIENT_SPOOF` 改成 `true`；
+3. 想同时保存歌词文件，再把下面的 `DOWNLOAD_LRC` 也改成 `true`；想让下载的文件自带完整的歌手 / 专辑 / 曲序 / 封面，把 `DOWNLOAD_TAGS` 也改成 `true`；想要客户端姿态救场，把 `ALLOW_CLIENT_SPOOF` 改成 `true`；
 4. **Ctrl+S 保存** → 回到音乐页面 **F5 刷新**（脚本是 `document-start` 注入，必须刷新才生效）。
 
 **打开之后各有什么变化：**
@@ -53,18 +59,19 @@ const CONFIG = {
 | `ALLOW_CLIENT_SPOOF` | 取流请求带 `os=pc / appver / channel / osver`（并往 cookie 补 `os=pc`）；网页播放器不给播、客户端能播的内容由脚本取流接管（救场） | 可能被认定为"避开访问控制技术措施"，自行评估 |
 | `ALLOW_DOWNLOAD` | 控制台（歌词上方那一排）出现**下载按钮**，按键把音频存到「音乐」文件夹 | 下载是权利方最常点名的一类功能 |
 | `DOWNLOAD_LRC` | 下载时在音频旁边再写一份同名双语 `.lrc`（原文 + 翻译同时间戳两行） | 歌词本身也是受保护的作品 |
+| `DOWNLOAD_TAGS` | 下载时把歌名 / 歌手 / 专辑 / 曲序 / 流派 / 添加时间 / 封面**写进音频文件本身**（MP3 写 ID3v2.3，FLAC 写 Vorbis Comment + PICTURE），资源管理器「属性 → 详细信息」直接看得到 | 只是把页面上已有的信息搬进文件，不改音频内容；但「带封面的完整文件」更接近可收藏的成品，分发风险由你判断 |
 
-**关着的时候是什么样（默认状态）：** 控制台上**没有下载按钮**（就算从控制台手动调 `downloadCurrent()` 也只会弹一句"默认关闭"）；不写任何客户端 cookie；站点自己的取流请求只是被改写 `level`（音质功能，不属于敏感项），不会再被塞 `os=pc` 那套参数；"客户端能听、网页不给听"那类内容不会被接管（站点原本怎么表现就怎么表现）。
+**关着的时候是什么样（默认状态）：** 控制台上**没有下载按钮**（就算从控制台手动调 `downloadCurrent()` 也只会弹一句"默认关闭"）；不写任何客户端 cookie；站点自己的取流请求只是被改写 `level`（音质功能，不属于敏感项），不会再被塞 `os=pc` 那套参数；"客户端能听、网页不给听"那类内容不会被接管（站点原本怎么表现就怎么表现）；下载下来的音频就是服务端原样字节，一个标签都不加。
 
 ---
 
 ## 🧩 全功能版（本机构建，不进仓库）
 
-不想每次手改三个开关，可以让脚本自己生成一份**全功能版**：
+不想每次手改四个开关，可以让脚本自己生成一份**全功能版**：
 
 ```bash
 node tools/build-full.cjs
-# → netease-music-full.user.js（同目录，~264 KB）
+# → netease-music-full.user.js（同目录，~283 KB）
 ```
 
 它做四件**替换字面量**的事（不做正则改写，找不到锚点直接报错停下）：
@@ -74,6 +81,7 @@ node tools/build-full.cjs
 | `CONFIG.ALLOW_CLIENT_SPOOF` | `false` | **`true`** —— 伪装 PC 客户端姿态取流 + 救场播放 |
 | `CONFIG.ALLOW_DOWNLOAD` | `false` | **`true`** —— 控制台出现下载按钮 |
 | `CONFIG.DOWNLOAD_LRC` | `false` | **`true`** —— 下载时顺带写双语 `.lrc` |
+| `CONFIG.DOWNLOAD_TAGS` | `false` | **`true`** —— 下载时把歌手 / 专辑 / 曲序 / 流派 / 添加时间 / 封面写进音频文件 |
 | `CONFIG.FULL_BUILD` | `false` | **`true`** —— 页头挂「全功能版」标 + 启动提示 |
 
 除此之外**一行代码都不改**：皮肤、红心、歌词、歌手页通通一样，`@version` 也跟着主脚本走。
@@ -82,7 +90,7 @@ node tools/build-full.cjs
 
 页头那个橙色「全功能版」标（上面截图里 `网易云音乐` 右边那颗）就是为此存在的 —— 它下面那排控件多出来一个 **⤓ 下载**按钮，启动时还会弹一句"已开启下载 / 客户端姿态取流"。装了两份的时候，一眼就能分清现在跑的是哪一份。
 
-**为什么它不进仓库：** 这三样正是权利方最常点名的一类功能，`ALLOW_CLIENT_SPOOF` 还可能被认定为「避开访问控制技术措施」。公开仓库只放三个开关为 `false` 的 lite 版，生成物写在 `.gitignore` 里 —— 要不要留一份在自己机器上、要不要给别人，由你自己判断。
+**为什么它不进仓库：** 这几样正是权利方最常点名的一类功能，`ALLOW_CLIENT_SPOOF` 还可能被认定为「避开访问控制技术措施」。公开仓库只放四个开关全是 `false` 的 lite 版，生成物写在 `.gitignore` 里 —— 要不要留一份在自己机器上、要不要给别人，由你自己判断。
 
 **用的时候注意：**
 
@@ -90,7 +98,7 @@ node tools/build-full.cjs
 2. 主脚本更新后**重新生成**（`node tools/build-full.cjs`），不要手改生成物 —— 手改的那份会跟主脚本漂移；
 3. 生成物里写清了它是从哪一版、什么时候生成的（头部那段 `▲ 这是「全功能版」`）。
 
-**验证：** `node netease-music-lite.full.test.cjs` 会钉死「公开版三个开关永远是 false」，并检查生成物开关全开、`@name` 写了「全功能版」、能被 `node --check` 解析、**幂等**、且**公开版字节不变**；e2e 也能跑这份：
+**验证：** `node netease-music-lite.full.test.cjs` 会钉死「公开版四个开关永远是 false」，并检查生成物开关全开、`@name` 写了「全功能版」、能被 `node --check` 解析、**幂等**、且**公开版字节不变**；e2e 也能跑这份：
 
 ```bash
 node e2e/server.cjs
@@ -98,6 +106,59 @@ node e2e/server.cjs
 ```
 
 此时页面里会多断言一条：`build badge=true text=全功能版 dlBtns=1`（lite 版是 `badge=false dlBtns=0`）。
+
+---
+
+## 🩹 v4.13.0 修了什么（下载的文件里什么都没有）
+
+以前下载下来的音频是**服务端原样字节** —— 文件名里有歌名和歌手，文件里面一个标签都没有。拷到别的机器、丢进本地播放器、在资源管理器里看「属性 → 详细信息」，标题 / 歌手 / 专辑 / 曲序 / 流派全是空的，封面也没有。v4.13.0 把这件事补上了（开关：`CONFIG.DOWNLOAD_TAGS`，**默认 `false`**，全功能版里是 `true`）。
+
+**写进去的字段**（MP3 → ID3v2.3，FLAC → Vorbis Comment + PICTURE，全部手写、零依赖）：
+
+| 你要的 | 写进去的标签（MP3 / FLAC） | 数据从哪来（实测） | 资源管理器「详细信息」里对应 |
+| --- | --- | --- | --- |
+| 歌名 | `TIT2` / `TITLE` | 播放队列里的曲目名 | 标题 |
+| 歌手名 | `TPE1` / `ARTIST`（另写 `TPE2` / `ALBUMARTIST`） | 曲目 artists | 作者、参与创作的艺术家、唱片集艺术家 |
+| 所属专辑 | `TALB` / `ALBUM` | 曲目 album（缺就用 `/api/v3/song/detail` 补） | 唱片集 |
+| 歌曲在专辑里的位置 | `TRCK=1/18` + `TPOS` / `TRACKNUMBER=1` + `TRACKTOTAL=18` + `DISCNUMBER` | 曲序 `/api/v3/song/detail` 的 `no`、`cd`；**总曲数要另打 `/api/v1/album/<id>` 的 `size`**（song 对象里没有） | #（第几首） |
+| 流派 | `TCON` / `GENRE` | **接口没有曲风字段**：`/api/v3/song/detail`、`/api/v1/album` 都没有 `genre`，专辑 `tags` 实测也是空数组 —— 所以只有歌单/专辑真带了 tags 才写，否则用 `CONFIG.TAG_GENRE` 里写死的值 | 流派 |
+| 添加时间 | `TXXX:ADDED` / `ADDED` | 队列对象上的 `at` / `addTime`（歌单里就是「添加时间」那个时间戳）；没有就记下载此刻 | 资源管理器没有这一列（mp3tag / foobar2000 能看到） |
+| 发行年 | `TYER` + `TDRC` / `DATE` + `YEAR` | 曲目或专辑的 `publishTime` | 年 |
+| 专辑封面 | `APIC`（type=3 正面封面）/ `PICTURE`（type=3） | 专辑详情 `album.picUrl` → 取 1200×1200 那张 | 音乐属性 → 封面 |
+| 歌曲封面 | `APIC`（type=0 其他）/ `PICTURE`（type=0） | 这首歌自己的 `al.picUrl`；**和专辑封面是同一张时不重复写** | 同上（多图播放器能看到第二张） |
+| （附加）网易 ID、音质 | `TXXX:NETEASE-ID`、`TXXX:LEVEL` / `NETEASEID`、`ENCODER` | 拿来自查，不占界面 | 编码人员（FLAC 能显示） |
+
+**几条实现上的讲究：**
+
+- **不碰音频字节。** MP3 只在最前面插/换一个 ID3v2 头（syncsafe 长度按帧体实数算），FLAC 只重排元数据块（`STREAMINFO` 必须在最前，旧的 `VORBIS_COMMENT` / `PICTURE` / `PADDING` 丢掉重建），封装的音频流一个字节都不动；
+- **重写不叠加。** 同一首重复下载不会套两层标签（先识别已有 ID3 再整段替换）；
+- **中文不乱码。** ID3 文本帧用 UTF-16 + BOM（`TIT2`/`TPE1`/… 全走这条），FLAC 的 Vorbis Comment 本身就是 UTF-8；
+- **写失败不拦下载。** 取封面 / 写标签任何一步出错，都只把提示缀在 toast 尾巴上（例如「已写入歌曲信息（封面没取到）」），音频照常保存 —— 音频比标签重要；
+- **认不出的封装原样保存**：`m4a/mp4` 明确提示「暂不支持写入歌曲信息（已按原样保存）」，别的未知格式同理。实际下载几乎用不到这两个分支：standard / higher / exhigh 都是 MP3，lossless / hires 是 FLAC。
+
+**实测（不是"应该能行"）：** 用 ffmpeg 生成真 MP3 / FLAC，把这一段的函数原样抽出来跑，产物再交给两个**独立解析器**看：
+
+```text
+$ ffprobe tagged.mp3
+  TAG:title=晴天  TAG:artist=周杰伦  TAG:album_artist=周杰伦  TAG:album=叶惠美
+  TAG:track=1/18  TAG:disc=1  TAG:genre=华语流行  TAG:date=2003
+  TAG:LEVEL=极高  TAG:ADDED=2026-09-30 12:00  TAG:NETEASE-ID=186016
+  stream: codec_name=mjpeg  width=640  height=640      ← 封面真的在文件里
+
+$ ffprobe tagged.flac
+  TAG:TITLE=晴天  TAG:ARTIST=周杰伦  TAG:ALBUM=叶惠美  TAG:track=1  TAG:TRACKTOTAL=18
+  TAG:GENRE=华语流行  TAG:DATE=2003-07-31  TAG:YEAR=2003  TAG:ADDED=…
+  stream: codec_name=mjpeg  width=640  height=640
+```
+
+再把这两个文件交给 **Windows 自己的属性处理程序**（就是「详细信息」那一栏背后的东西，`Shell.Application.GetDetailsOf`）：
+
+```text
+tagged.mp3 : 标题=晴天  作者=周杰伦  唱片集=叶惠美  年=2003  流派=华语流行  #=1  唱片集艺术家=周杰伦
+tagged.flac: 标题=晴天  作者=周杰伦  唱片集=叶惠美  年=2003  流派=华语流行  #=1  编码人员=网易云音乐 极高
+```
+
+FLAC 的「年」一开始是空的 —— Media Foundation 的 FLAC 处理程序读 `YEAR` 而不读 `DATE`，所以现在两个都写（上面那段代码注释里记着这件事）。
 
 ---
 
@@ -366,6 +427,8 @@ http://p1.music.126.net/<hash>/<id>.jpg
 
 另外所有封面 `<img>` 都带一份 `data-nm3raw`（站点原图）：加载失败时 `onCoverError`（`error` 事件不冒泡，用捕获阶段接）先退回原图，再不行才换成音符占位图，任何列表都不会留破图或空白。
 
+**其四（v4.13.0）：封面和这些字段只活在页面里，下载下来就没了。** 打开 `CONFIG.DOWNLOAD_TAGS` 后，下载时会把 歌名 / 歌手 / 专辑 / 曲序 / 流派 / 添加时间 / 发行年 / 专辑封面 / 歌曲封面 一起写进音频文件（MP3 → ID3v2.3，FLAC → Vorbis Comment + PICTURE），资源管理器「属性 → 详细信息」里直接能看到，搬到别的机器上也不会丢。字段来源、字节级讲究与实测结果见上文[「v4.13.0 修了什么」](#-v4130-修了什么下载的文件里什么都没有)。
+
 ### 音质保险丝
 
 万一个档位取不到流（会员过期、单曲没有该音质），音频元素会抛 `error`；脚本监听它并把档位降回默认的「极高」，这样**站点自己的重试逻辑下一次请求就会带上 `exhigh` 从而自愈**。用户的选择本身会保留（下一首仍会尝试），避免卡在"有歌但放不出来"。
@@ -600,6 +663,8 @@ GET /api/comment/music?id=…     HTTP 200  {"code":404,"message":"接口未找�
 - **点赞 / 收藏这类写操作需要登录，而且可能被风控。** 未登录服务端回 `301`（HTTP 仍然是 200）；被判定网络环境有风险回 `-460 / -462` —— 脚本无法绕过风控，只会如实说明（官方给的绕过办法只有换国内出口 IP）。★ 实测：老路由 `/api/radio/like` 不带客户端姿态直接回 `-460`，而 `/api/v1/radio/like` 回的是正常的 `301`。v4.10.0 起**默认设置下收藏走 `/api/v1/playlist/manipulate/tracks`**（站点红心自己用的那条），不再依赖 `ALLOW_CLIENT_SPOOF`；万一都被风控，脚本会如实说出 `-460`，而不是假装成功。
 - **关掉 `ALLOW_CLIENT_SPOOF` 的连带影响**：不做"救场"，所以「客户端能听、网页不给听」那类内容不会再被脚本接管；音质选择（改写 `level`）不受影响，站点本身的播放也不受影响。
 - **关掉 `ALLOW_DOWNLOAD` 时控制台上没有下载按钮**，这是默认状态；从控制台手动调 `downloadCurrent()` 也只会提示去开开关。
+- **`CONFIG.DOWNLOAD_TAGS` 也默认关着**（全功能版里才开）。打开后仍有几处如实写在提示里：`m4a / mp4` 不写标签（原样保存，提示会说明）；**流派接口根本不给**，只有歌单/专辑真带了 `tags` 才写，否则用 `CONFIG.TAG_GENRE` 里写死的值；「添加时间」和「网易 ID」存在自定义字段里（`TXXX:ADDED` / `ADDED`），**资源管理器没有这两列** —— mp3tag、foobar2000、MusicBee 这类能看；封面写进了文件（`APIC` / `PICTURE` type=3），在「属性 → 音乐属性 → 封面」里看，资源管理器的**列表视图没有封面缩略图列**，那不是脚本的问题。
+- **写入标签只认 MP3 与 FLAC。** 这两种正好覆盖站点能下到的全部音质（standard / higher / exhigh 是 MP3，lossless / hires 是 FLAC），但如果你自己换了别的水源，脚本不会假装写成功。
 - **逐字歌词（`yrc`）只有部分歌曲有**，而且要请求带 `yv=-1` 才返回；没有就退化成整行高亮（功能不受影响）。罗马音（`romalrc`）同样不是每首都存在。
 - **本脚本没有对着真实站点跑过完整流程**（需要登录态），但 v4.10.0 起在**真实浏览器 + 模拟站点**下端到端跑过一遍（`e2e/`），见下方"验证情况"。
 
@@ -626,7 +691,8 @@ GET /api/comment/music?id=…     HTTP 200  {"code":404,"message":"接口未找�
 - **开关 + 免责声明测试**（`node netease-music-lite.switches.test.cjs`，6 组）：把客户端姿态那段原样抽出来跑桩 —— **默认值必须是 `false`**（源码级断言，防止有人改回开启）；关着时不写任何 cookie、URL 不追加 `os/appver/…`、取流请求不带客户端字段、救场连音频元素都不碰；打开后三处都补齐（证明开关真的有效而非死代码）；`downloadAllowed()` 取值、下载按钮的条件渲染、`downloadCurrent()` 开头的兜底拦截、`DOWNLOAD_LRC` 独立判断；脚本头部免责声明关键词（个人学习 / 严禁商业用途 / 不绕过付费 / 24 小时内删除 / 服务条款 / 两个开关 / 现状）与 `@description` 里的"仅供个人学习研究""默认关闭"。（"开关关着时写接口不带 `os=pc`"这一条在 lyric-like 那套的第 10 组里。）
 - **端到端冒烟测试（真实浏览器 + 模拟站点，`e2e/`）**：`node e2e/server.cjs` 起一个迷你静态服务器，用 Chrome/Edge 无头模式打开 `mock.html`，由一段驱动脚本**像用户那样点**（搜索、点第 2 行、切歌手、加载更多、切专辑、点专辑、返回、点 ♡），最后把结论打进页面。`fetch` 被换成桩并**故意让 `/api/radio/like` 回 `-460`**，复现用户那边"收藏没用"的环境。最近一次结果：`RESULT OK jsErrors=[]`，`clickRow2=搜索第二首`，`tabs=["全部歌曲106","专辑"]`，`songs=50 more=true afterMore=100/true albums=30`，`albumCoverEndsWith300y300=true keepsWatermark=true`，`back: isArtist=true`，`LIKE toast=[已收藏到「我喜欢的音乐」] writes=["/api/v1/playlist/manipulate/tracks?op=add"]`，`coverFallback changed=true`；最后一步**构建核对**：lite 版 `build badge=false dlBtns=0`，换成 `?build=full`（先 `node tools/build-full.cjs`）后 `build badge=true text=全功能版 dlBtns=1`，且标与下载按钮必须一致（一边有一边没有就记成 jsError）。，最后新加一步**连点三下皮肤按钮**：`skin cycle=["ink","rhine-day","rhine-night","ink"] accents=["#4EA4EF","#C2571F","#E4692A","#4EA4EF"] chip=原皮`（连 `<html>` 上真取到的主色都跟着变，不是只改了属性）。截图存在 `e2e/artist-page.png`（原皮）、`e2e/skin-rhine-day.png`、`e2e/skin-rhine-night.png`；加 `?skin=rhine-day` 可直接进对应皮肤。
 - **皮肤回归测试**（`node netease-music-lite.skin.test.cjs`，9 组）：把真实的皮肤代码段原样抽出来跑桩 —— 三套皮肤都注册了（chip 文案 `原皮`/`晨雾`/`月影`）；默认原皮且**不给 `<html>` 挂属性**（CSS 靠"属性缺失 = 原皮"）；循环切换 `原皮 → 晨雾 → 月影 → 原皮` 并写进 `localStorage`、切回原皮要摘属性；预置 `nm3.skin=rhine-night` 时启动即挂属性（不闪一帧原皮）；非法存值回落原皮；按钮文案与 `title` 跟着皮肤走；`document-start` 阶段**还没有 `<html>`** 时不抛错、等 `DOMContentLoaded` 补挂；样式层两套莱茵皮肤变量齐全、`SKIN_CSS` 里**不含任何原皮色**（抄进来就等于"换了皮肤还是蓝的"）、装饰规则全部带 `html[data-nm3-skin^="rhine"]` 前缀；接线四处都在（按钮、点击、注入 `SKIN_CSS`、启动 `applySkin()`）。
-- **全功能版构建测试**（`node netease-music-lite.full.test.cjs`，8 组）：公开版三个开关与 `FULL_BUILD` 必须是 `false`（源码级，防止有人悄悄改回）；公开版页头**不输出**标记、启动**不弹**提示；全功能版标记带 `id=nm3-full`、文字「全功能版」、`title` 说明开了哪几样，启动正好提示一次；`buildBar` 与 `boot` 两处接线都在；生成物四个开关全 `true`、`@name` 带「全功能版」、带构建时间、`@description` 写明请勿分发；生成物能过 `node --check`；**幂等**且**公开版字节不变**；锚点缺失或重复时明确抛错（宁可不生成，也不生成半成品）。
+- **全功能版构建测试**（`node netease-music-lite.full.test.cjs`，8 组）：公开版四个开关与 `FULL_BUILD` 必须是 `false`（源码级，防止有人悄悄改回）；公开版页头**不输出**标记、启动**不弹**提示；全功能版标记带 `id=nm3-full`、文字「全功能版」、`title` 说明开了哪几样，启动正好提示一次；`buildBar` 与 `boot` 两处接线都在；生成物四个开关全 `true`、`@name` 带「全功能版」、带构建时间、`@description` 写明请勿分发；生成物能过 `node --check`；**幂等**且**公开版字节不变**；锚点缺失或重复时明确抛错（宁可不生成，也不生成半成品）。
+- **写进音频文件的歌曲信息（v4.13.0）**：这一版按你的要求**没写回归测试**，改用两个**独立解析器**验收 —— 用 ffmpeg 生成真 MP3 / FLAC，跑完写入函数再交给 `ffprobe` 与 Windows 自己的属性处理程序（`Shell.Application.GetDetailsOf`）。结果：`ffprobe` 报出 `title/artist/album/album_artist/track=1/18/disc/genre/date`、FLAC 报出 `TITLE…TRACKTOTAL=18…YEAR`，两边都多出一条 `codec_name=mjpeg width=640 height=640`（封面真的成了文件里的第二张图）；Windows「详细信息」读到 标题 / 作者 / 唱片集 / 年 / 流派 / #（曲序）/ 唱片集艺术家 / 编码人员。另外自检了 32 项字节级不变量：syncsafe 长度与帧体实际长度一致、音频字节**逐字节原样**、重写**不叠加**（长度不变）、FLAC 块顺序 `STREAMINFO → VORBIS_COMMENT → PICTURE` 且最后一块带 last 标记、ID3 文本帧用 UTF-16+BOM 中文不乱码 —— 全部通过。
 - **线上包实测（v4.10.0，红心的根因证据）**：从 `music.163.com` 拉下现在线上的三个包 —— `core_c7686f50….js`（699 KB，播放器/队列）、`pt_frame_index_….js`（209 KB，框架）、`discover_….js`（33 KB，首页推荐）—— 逐个扫接口名：**`/api/radio` 一次都没出现**，也没有 `window.subscribe`；写"喜欢"的只有 `/api/resource/like` / `/api/resource/unlike`（用于 `A_DJ_1_<id>` 这类节目 threadId 和评论），而**歌曲红心**走的是 `playlist/manipulate/tracks`（`data.op: add` / `del`、`trackIds` 整串 JSON、错误码 `502`=歌曲已存在、`505`=歌单已满、`521`=需绑定手机号）。★ 结论：对"歌曲"而言老路由 `/api/radio/like` 已经不是站点在用的收藏接口，`/api/v1/radio/like` 只是它的 v1 路由（可用，但不是官方现路），所以 v4.10.0 把它挪到 `/api/v1/playlist/manipulate/tracks` 之后。
 - **写操作的线上实测（未登录，只读探测；v4.9.0 复测）**：`/api/v1/comment/like` 与 `/api/v1/comment/unlike` 都在（回 `301`），裸 `threadId` 回 `400 illegal resourceId!`，假路由回 `404`；`/api/radio/like` 回 `-460`（风控）—— ★ 这次**带上 `os=pc; appver; channel; osver` 这套 cookie 也照样回 `-460`**，说明风控还看出口 IP，作者当初"带姿态就回 301"的结论不是所有环境都成立；`/api/v1/radio/like`、`/api/v1/playlist/manipulate/tracks`（`op=add&pid=…&trackIds=[…]`）、`/api/v1/artist/songs`、`/api/artist/albums/<id>` 都回正常的 `301`（即认证层，能到就会在登录后生效），`/api/v1/artist/albums/…` 与 `/api/v1/song/like` 回 `404`；`/api/song/lyric/v1` 一次拿回 `lrc` + `tlyric` + `romalrc`（Lemon，1761 / 969 / 2190 字节）。★ 带登录态的**写入结果**本机验不了，见上一条"诚实说明"。
 - **封面 URL 形态实测**：抽了 720 个搜索结果的歌单封面 —— 全部是 `http://p1.music.126.net/…jpg`（要升级 https），其中 **92 个（12.8%）**自带 `?imageView=1&thumbnail=800y800&…&watermark&…` 的合成 query，且**全部**以 `%7CimageView=1` 收尾；`&param=`/`thumbnail=`（不在 imageView 里）这两种情况在这批数据里是 0 个。curl 实测：合成 URL 直接加 `&param=300y300` 大小不变（被忽略，最大 1.1 MB），把 `thumbnail=300y300` 追加到末尾后降到 180 KB；把整串 query 丢掉只剩模糊底图（截图确认）。
@@ -674,11 +740,13 @@ const CONFIG = {
   ARTIST_ALBUM_PAGE: 30,     // 歌手「专辑」每页多少张
   TICK: 300,                 // 轮询间隔（毫秒）
 
-  // ★ 三个默认关闭的敏感开关（见本文开头的说明；测试会盯住它们必须是 false）
+  // ★ 四个默认关闭的敏感开关（见本文开头的说明；测试会盯住它们必须是 false）
   ALLOW_CLIENT_SPOOF: false, // ① 伪装 PC 客户端姿态取流（os=pc / appver…，含救场）
   ALLOW_DOWNLOAD: false,     // ② 下载（打开后控制台才出现下载按钮）
   DOWNLOAD_LRC: false,       // ③ 下载时顺带写双语 .lrc（仅当 ② 打开时有效）
   DOWNLOAD_SUBDIR: '',       // 下载目录：选定「音乐」文件夹后再往里放的子文件夹名
+  DOWNLOAD_TAGS: false,      // ④ 下载时把歌曲信息写进音频文件（仅当 ② 打开时有效）
+  TAG_GENRE: '',             // ④-2 流派写死值（接口不给曲风，留空=只在有 tags 时写）
 
   // ★ 全功能版标记：只由 tools/build-full.cjs 打开，别手改
   FULL_BUILD: false
@@ -712,6 +780,6 @@ const SKINS = [                // 顺序就是按钮的循环顺序
 - `netease-music-lite.cover-artist.test.cjs` —— 封面（合成 URL / 兜底）+ 点行播放归属 + 歌手详情（全部歌曲 / 专辑 / 详情栈）的回归测试，`node netease-music-lite.cover-artist.test.cjs` 直接跑（见"验证情况"）
 - `netease-music-lite.switches.test.cjs` —— 免责声明 + 三个默认关闭开关的回归测试，`node netease-music-lite.switches.test.cjs` 直接跑（**把"默认必须关着"钉死**，见"验证情况"）
 - `netease-music-lite.skin.test.cjs` —— 三套皮肤（原皮 / 莱茵生命·晨雾 / 月影）的回归测试：切换顺序、记住选择、非法值回落、`document-start` 无 `<html>` 时不炸、样式层不含原皮色，`node netease-music-lite.skin.test.cjs` 直接跑（见"验证情况"）
-- `netease-music-lite.full.test.cjs` —— 全功能版构建的回归测试：公开版三个开关必须仍是 `false`、生成物开关全开且 `@name` 带「全功能版」、可 `node --check`、幂等、公开版字节不变、锚点缺失/重复时明确报错，`node netease-music-lite.full.test.cjs` 直接跑
+- `netease-music-lite.full.test.cjs` —— 全功能版构建的回归测试：公开版四个开关必须仍是 `false`、生成物开关全开且 `@name` 带「全功能版」、可 `node --check`、幂等、公开版字节不变、锚点缺失/重复时明确报错，`node netease-music-lite.full.test.cjs` 直接跑
 - `tools/build-full.cjs` —— 生成全功能版的构建脚本（`node tools/build-full.cjs`），只做字面量替换；生成物 `netease-music-full.user.js` 在 `.gitignore` 里，不进公开仓库
 - `e2e/` —— 真实浏览器 + 模拟站点的端到端冒烟测试（`node e2e/server.cjs` + 无头 Chrome/Edge，见 `e2e/README.md` 与"验证情况"）；`artist-page.png` / `skin-rhine-day.png` / `skin-rhine-night.png` 是三套皮肤的验收截图，`full-build.png` 是全功能版（页头标 + 下载按钮）的验收截图

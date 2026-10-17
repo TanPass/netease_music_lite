@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         网易云音乐 · 精简版（听歌 / 搜索 / 我的音乐）
 // @namespace    https://music.163.com/
-// @version      4.12.0
+// @version      4.13.0
 // @description  把网易云音乐网页版重做成深蓝夜色的三页签播放器：听歌（大封面 + 歌词上方的完整播放控制台：上一首/播放暂停/下一首、进度条、播放模式、音量、可展开点歌的播放列表、收藏、分享 + 可点赞的评论 + 时间轴歌词（翻译 / 罗马音 / 逐字） + 音质选择 + 专辑/歌手点进去看详情）、搜索（歌曲/歌手/专辑/歌单）、我的音乐。站点导航与内容区移除，底部播放条整体让位。歌手页可看**全部歌曲**（可翻页）与**专辑**；收藏走多条官方口径并在服务端核实状态。**自带三套皮肤**（原皮 · 深蓝夜色 / 莱茵生命 · 晨雾 / 莱茵生命 · 月影），页头按钮循环切换。**仅供个人学习研究、非商业用途**：涉及「伪装客户端姿态取流」「下载」的功能默认关闭，需自行在 CONFIG 里打开，详见脚本顶部免责声明。
 // @author       TanPass
 // @match        https://music.163.com/*
@@ -274,7 +274,20 @@
 
     DOWNLOAD_SUBDIR: '',       // 下载目录：选定「音乐」文件夹后再往里放的子文件夹名（空=直接放音乐文件夹）
 
-    /* ④ 全功能版标记：**不要手改**。
+    // ④ 下载时把歌曲信息**写进音频文件**：标题 / 歌手名 / 所属专辑 / 歌曲在专辑里的
+    //    位置（第几首 / 共几首 / 第几张碟）/ 专辑封面 / 歌曲封面 / 流派 / 添加时间 /
+    //    发行年。MP3 写 ID3v2.3，FLAC 写 Vorbis Comment + PICTURE，写完在
+    //    「资源管理器 → 属性 → 详细信息」里就能看到（封面在「音乐属性 → 封面」）。
+    //    只在上一条（ALLOW_DOWNLOAD）打开时有效。
+    DOWNLOAD_TAGS: false,
+
+    // ④-2 「流派」写死值。★ 实测站点接口**不提供**曲风字段：/api/v3/song/detail、
+    //      /api/v1/album 都没有 genre，专辑 tags 也是空的，所以自动几乎填不出东西。
+    //      想固定写一个（比如 '流行'、'华语'）就填在这里；留空 = 只在歌单/专辑
+    //      真的带了 tags 时才写。
+    TAG_GENRE: '',
+
+    /* ⑤ 全功能版标记：**不要手改**。
      *    tools/build-full.cjs 生成的那份（netease-music-full.user.js）会把它设成 true，
      *    作用是页头挂一个「全功能版」标、启动时提示已开了哪几个开关。
      *    公开仓库里这份永远是 false —— 所以你看不到也打不开。 */
@@ -2205,17 +2218,17 @@
   /**
    * 全功能版标记（只由 tools/build-full.cjs 生成的构建打开，公开版恒为空）。
    * 页头那个小标就是为了让你一眼认出「现在装的是哪一份」——
-   * 因为它比公开版多了三个默认关闭的敏感功能，出问题时要能分清是哪份的行为。
+   * 因为它比公开版多了四个默认关闭的敏感功能，出问题时要能分清是哪份的行为。
    */
   function fullBadge() {
     if (CONFIG.FULL_BUILD !== true) return '';
-    return '<em class="nm3-full" id="nm3-full" title="全功能版：客户端姿态取流 / 下载 / 附带 .lrc 均已开启，仅供本机个人使用">全功能版</em>';
+    return '<em class="nm3-full" id="nm3-full" title="全功能版：客户端姿态取流 / 下载 / 附带 .lrc / 下载时写入歌曲信息（含封面）均已开启，仅供本机个人使用">全功能版</em>';
   }
 
   /** 全功能版启动时说清楚开了什么（公开版什么都不说，避免刷屏） */
   function fullNotice() {
     if (CONFIG.FULL_BUILD !== true) return;
-    toast('全功能版：客户端姿态取流 / 下载 / 附带 .lrc 已开启；仅供本机个人听歌，别再分发', 7000);
+    toast('全功能版：客户端姿态取流 / 下载 / 附带 .lrc / 写入歌曲信息 已开启；仅供本机个人听歌，别再分发', 7000);
   }
 
   function buildBar() {
@@ -4234,6 +4247,423 @@
     return pump();
   }
 
+  /* ═════════════ 下载：把歌曲信息写进音频文件（ID3v2.3 / FLAC） ═════════════
+   *
+   * 为什么自己写：网页只能拿到「一段音频字节」，没有任何库可借；而
+   * 「资源管理器 → 属性 → 详细信息」里能看到标题 / 歌手 / 专辑 / 曲序 / 流派 /
+   * 年 / 封面，靠的正是文件里的元数据块：
+   *   · MP3  → 文件头的 ID3v2.3 标签（TIT2/TPE1/TALB/TRCK/TPOS/TCON/TYER/APIC…）
+   *   · FLAC → STREAMINFO 之后的 Vorbis Comment（TITLE/ARTIST/ALBUM…）+ PICTURE
+   * 下面就是这两个容器的**最小编码器**：只动元数据，音频帧一个字节都不碰。
+   *
+   * 文字一律 UTF-16LE + BOM（ID3v2.3 的 encoding=1）：Windows 资源管理器和
+   * 多数老播放器只认这个；UTF-8 在 v2.3 里本来就不是规范内编码（那是 v2.4 的事）。
+   */
+
+  const tagEnc8 = (s) => {
+    const str = String(s == null ? '' : s);
+    const out = new Uint8Array(str.length);
+    for (let i = 0; i < str.length; i++) out[i] = str.charCodeAt(i) & 0xff;
+    return out;
+  };
+
+  const tagUtf8 = (s) => {
+    const str = String(s == null ? '' : s);
+    const out = [];
+    for (const ch of str) {
+      const c = ch.codePointAt(0);
+      if (c < 0x80) out.push(c);
+      else if (c < 0x800) out.push(0xc0 | (c >> 6), 0x80 | (c & 63));
+      else if (c < 0x10000) out.push(0xe0 | (c >> 12), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63));
+      else out.push(0xf0 | (c >> 18), 0x80 | ((c >> 12) & 63), 0x80 | ((c >> 6) & 63), 0x80 | (c & 63));
+    }
+    return new Uint8Array(out);
+  };
+
+  /** UTF-16LE + BOM + 结尾 00 00（ID3 里 encoding=1 的字符串就是这么存的） */
+  const tagUtf16 = (s) => {
+    const str = String(s == null ? '' : s);
+    const out = new Uint8Array(2 + str.length * 2 + 2);
+    out[0] = 0xff; out[1] = 0xfe;
+    let p = 2;
+    for (let i = 0; i < str.length; i++) {
+      const c = str.charCodeAt(i);
+      out[p++] = c & 0xff;
+      out[p++] = (c >> 8) & 0xff;
+    }
+    out[p] = 0; out[p + 1] = 0;
+    return out;
+  };
+
+  const tagU32be = (n) => [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255];
+  const tagU24be = (n) => [(n >>> 16) & 255, (n >>> 8) & 255, n & 255];
+  const tagU32le = (n) => [n & 255, (n >>> 8) & 255, (n >>> 16) & 255, (n >>> 24) & 255];
+  const tagSyncSafe = (n) => [(n >>> 21) & 127, (n >>> 14) & 127, (n >>> 7) & 127, n & 127];
+
+  /** 把「Uint8Array / 数字数组 / 字符串(按 latin1)」拼成一块 */
+  function tagJoin(parts) {
+    const list = [];
+    let len = 0;
+    for (const p of parts) {
+      if (!p) continue;
+      const a = (p instanceof Uint8Array) ? p : (Array.isArray(p) ? new Uint8Array(p) : tagEnc8(p));
+      if (!a.length) continue;
+      list.push(a);
+      len += a.length;
+    }
+    const out = new Uint8Array(len);
+    let at = 0;
+    for (const a of list) { out.set(a, at); at += a.length; }
+    return out;
+  }
+
+  /* ── 图片：认格式 + 读宽高（FLAC 的 PICTURE 块要填尺寸，填 0 也能播，但能不填就不填） ── */
+  function imageInfo(bytes) {
+    if (!bytes || bytes.length < 16) return null;
+    if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) {
+      const w = (bytes[16] << 24) | (bytes[17] << 16) | (bytes[18] << 8) | bytes[19];
+      const h = (bytes[20] << 24) | (bytes[21] << 16) | (bytes[22] << 8) | bytes[23];
+      return { mime: 'image/png', w: w, h: h };
+    }
+    if (bytes[0] === 0xff && bytes[1] === 0xd8) {
+      let p = 2;
+      while (p + 9 < bytes.length) {
+        if (bytes[p] !== 0xff) { p++; continue; }
+        const marker = bytes[p + 1];
+        if (marker === 0xd8 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) { p += 2; continue; }
+        if (marker === 0xd9 || marker === 0xda) break;
+        const seg = (bytes[p + 2] << 8) | bytes[p + 3];
+        if (seg < 2) break;
+        if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
+          const h = (bytes[p + 5] << 8) | bytes[p + 6];
+          const w = (bytes[p + 7] << 8) | bytes[p + 8];
+          return { mime: 'image/jpeg', w: w, h: h };
+        }
+        p += 2 + seg;
+      }
+      return { mime: 'image/jpeg', w: 0, h: 0 };
+    }
+    if (bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46) return { mime: 'image/gif', w: 0, h: 0 };
+    if (bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50) {
+      return { mime: 'image/webp', w: 0, h: 0 };
+    }
+    return null;
+  }
+
+  /** 下一张封面（整张原图级别：param=1200y1200，实测 200~800 KB） */
+  async function fetchCoverBytes(url) {
+    const u = pic(url, 1200);
+    if (!u) return null;
+    try {
+      const res = await fetch(u, { credentials: 'omit' });
+      if (!res.ok) return null;
+      const data = new Uint8Array(await res.arrayBuffer());
+      const inf = imageInfo(data);
+      if (!inf) return null;
+      return { data: data, mime: inf.mime, w: inf.w, h: inf.h };
+    } catch (e) {
+      warn('取封面失败（不影响音频）', e);
+      return null;
+    }
+  }
+
+  /* ── ID3v2.3 ── */
+  function id3Frame(id, payload) {
+    const body = (payload instanceof Uint8Array) ? payload : tagJoin(payload);
+    return tagJoin([tagEnc8(id), tagU32be(body.length), [0, 0], body]);
+  }
+
+  function id3Text(id, value) {
+    const s = String(value == null ? '' : value).trim();
+    if (!s) return null;
+    return id3Frame(id, [[1], tagUtf16(s)]);
+  }
+
+  /** TXXX：自定义键值（添加时间、网易云 id、音质档位都塞这里，播放器原文显示） */
+  function id3Txxx(desc, value) {
+    const d = String(desc || '').trim();
+    const v = String(value == null ? '' : value).trim();
+    if (!d || !v) return null;
+    return id3Frame('TXXX', [[1], tagUtf16(d), tagUtf16(v)]);
+  }
+
+  /** APIC：type 3 = 正面封面（资源管理器就显示这张），0 = 其他图片 */
+  function id3Apic(mime, type, desc, data) {
+    if (!data || !data.length) return null;
+    return id3Frame('APIC', [[1], tagEnc8(mime || 'image/jpeg'), [0], [type & 0xff], tagUtf16(desc || ''), data]);
+  }
+
+  function id3v23(frames) {
+    const body = tagJoin(frames.filter(Boolean));
+    if (!body.length) return null;
+    return tagJoin([tagEnc8('ID3'), [3, 0], [0], tagSyncSafe(body.length), body]);
+  }
+
+  /** 跳过文件开头已有的 ID3v2（可能叠了好几层，实测见过两层） */
+  function skipId3v2(bytes) {
+    let off = 0;
+    for (let guard = 0; guard < 4; guard++) {
+      if (off + 10 > bytes.length) break;
+      if (!(bytes[off] === 0x49 && bytes[off + 1] === 0x44 && bytes[off + 2] === 0x33)) break;
+      const major = bytes[off + 3];
+      const size = ((bytes[off + 6] & 127) << 21) | ((bytes[off + 7] & 127) << 14) |
+        ((bytes[off + 8] & 127) << 7) | (bytes[off + 9] & 127);
+      let total = 10 + size;
+      if (major >= 4 && (bytes[off + 5] & 0x10)) total += 10;
+      off += total;
+    }
+    return Math.min(off, bytes.length);
+  }
+
+  const looksMp3 = (b) => {
+    if (b.length > 3 && b[0] === 0x49 && b[1] === 0x44 && b[2] === 0x33) return true;
+    const o = skipId3v2(b);
+    return o + 1 < b.length && b[o] === 0xff && (b[o + 1] & 0xe0) === 0xe0;
+  };
+  const looksFlac = (b) => b.length > 4 && b[0] === 0x66 && b[1] === 0x4c && b[2] === 0x61 && b[3] === 0x43;
+  const looksMp4 = (b) => b.length > 12 && b[4] === 0x66 && b[5] === 0x74 && b[6] === 0x79 && b[7] === 0x70;
+
+  function tagMp3(bytes, meta) {
+    const tag = id3v23([
+      id3Text('TIT2', meta.title),                       // 标题
+      id3Text('TPE1', meta.artists),                     // 作者（歌手）
+      id3Text('TPE2', meta.artists),                     // 唱片集艺术家
+      id3Text('TALB', meta.album),                       // 唱片集（所属专辑）
+      id3Text('TRCK', meta.track),                       // 音轨号「第几首/共几首」
+      id3Text('TPOS', meta.disc),                        // 光盘号
+      id3Text('TCON', meta.genre),                       // 流派
+      id3Text('TYER', meta.year),                        // 年
+      id3Txxx('ADDED', meta.added),                      // 添加时间
+      id3Txxx('NETEASE-ID', meta.songId),                // 便于回溯
+      id3Txxx('LEVEL', meta.level),                      // 下载时的音质档位
+      id3Apic(meta.albumCover && meta.albumCover.mime, 3, '专辑封面',
+        meta.albumCover && meta.albumCover.data),
+      id3Apic(meta.songCover && meta.songCover.mime, 0, '歌曲封面',
+        meta.songCover && meta.songCover.data)
+    ]);
+    if (!tag) return null;
+    return tagJoin([tag, bytes.subarray(skipId3v2(bytes))]);
+  }
+
+  function flacBlocks(bytes) {
+    const blocks = [];
+    let p = 4;
+    let last = false;
+    for (let guard = 0; !last && p + 4 <= bytes.length && guard < 512; guard++) {
+      const head = bytes[p];
+      last = !!(head & 0x80);
+      const type = head & 0x7f;
+      const len = (bytes[p + 1] << 16) | (bytes[p + 2] << 8) | bytes[p + 3];
+      const body = bytes.subarray(p + 4, p + 4 + len);
+      if (body.length !== len) return null;
+      blocks.push({ type: type, body: body });
+      p += 4 + len;
+    }
+    if (!blocks.length) return null;
+    return { blocks: blocks, audio: bytes.subarray(p) };
+  }
+
+  function flacVorbisComment(pairs, vendor) {
+    const v = tagUtf8(vendor || 'netease-music-lite');
+    const parts = [tagU32le(v.length), v, tagU32le(pairs.length)];
+    for (const pair of pairs) {
+      const kv = tagUtf8(pair[0] + '=' + pair[1]);
+      parts.push(tagU32le(kv.length), kv);
+    }
+    return tagJoin(parts);
+  }
+
+  function flacPicture(img, type, desc) {
+    const mime = tagEnc8(img.mime || 'image/jpeg');
+    const d = tagUtf8(desc || '');
+    return tagJoin([
+      tagU32be(type), tagU32be(mime.length), mime,
+      tagU32be(d.length), d,
+      tagU32be(img.w || 0), tagU32be(img.h || 0), tagU32be(24), tagU32be(0),
+      tagU32be(img.data.length), img.data
+    ]);
+  }
+
+  function tagFlac(bytes, meta) {
+    const parsed = flacBlocks(bytes);
+    if (!parsed) return null;
+
+    const pairs = [];
+    const add = (k, v) => {
+      const s = String(v == null ? '' : v).trim();
+      if (s) pairs.push([k, s]);
+    };
+    add('TITLE', meta.title);
+    add('ARTIST', meta.artists);
+    add('ALBUMARTIST', meta.artists);
+    add('ALBUM', meta.album);
+    add('TRACKNUMBER', meta.no);
+    add('TRACKTOTAL', meta.total);
+    add('DISCNUMBER', meta.disc);
+    add('GENRE', meta.genre);
+    add('DATE', meta.date);
+    // Windows 的资源管理器（Media Foundation 的 FLAC 处理程序）读「年」这一列用
+    // YEAR 而不是 DATE —— 只写 DATE 的话那边「年」是空的（实测），两个都写最稳。
+    add('YEAR', meta.year);
+    add('ADDED', meta.added);
+    add('NETEASEID', meta.songId);
+    add('ENCODER', meta.level ? '网易云音乐 ' + meta.level : '');
+
+    // STREAMINFO 必须留在第一个；PADDING / 旧的 VORBIS_COMMENT / 旧的 PICTURE 丢掉重写
+    const out = [];
+    for (const b of parsed.blocks) {
+      if (b.type === 1 || b.type === 4 || b.type === 6) continue;
+      out.push({ type: b.type, body: b.body });
+    }
+    out.push({ type: 4, body: flacVorbisComment(pairs) });
+    if (meta.albumCover && meta.albumCover.data) {
+      out.push({ type: 6, body: flacPicture(meta.albumCover, 3, '专辑封面') });
+    }
+    if (meta.songCover && meta.songCover.data) {
+      out.push({ type: 6, body: flacPicture(meta.songCover, 0, '歌曲封面') });
+    }
+
+    const parts = [tagEnc8('fLaC')];
+    out.forEach((b, i) => {
+      const last = i === out.length - 1;
+      parts.push([(last ? 0x80 : 0) | (b.type & 0x7f)]);
+      parts.push(tagU24be(b.body.length));
+      parts.push(b.body);
+    });
+    parts.push(parsed.audio);
+    return tagJoin(parts);
+  }
+
+  /** 「3/12」「01」这类曲序文本：没有就返回空，别写「0/0」 */
+  function trackNoText(no, total) {
+    const n = Number(no);
+    if (!(n > 0)) return '';
+    const t = Number(total);
+    return t > 0 ? (n + '/' + t) : String(n);
+  }
+
+  /** 本地时间 'YYYY-MM-DD HH:MM'（添加时间用这个形状，播放器里一眼能读） */
+  function localStamp(ms) {
+    const d = new Date(ms);
+    if (isNaN(d.getTime())) return '';
+    const pad = (n) => String(n).padStart(2, '0');
+    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) +
+      ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+  }
+
+  /**
+   * 收集要写进文件的信息。
+   * ★ 字段来源（实测过，别凭印象改）：
+   *   曲序   /api/v3/song/detail → no（第几首）、cd（第几张碟）
+   *   总曲数 /api/v1/album/<id>  → album.size（song 对象里没有总曲数）
+   *   发行年 song.publishTime（毫秒）
+   *   封面   album.picUrl（专辑封面）+ song.al.picUrl（这首歌的封面）
+   *   流派   **接口没有**：只剩歌单 / 专辑 tags 与 CONFIG.TAG_GENRE 两条路
+   *   添加时间 队列对象带 at/addTime 就用它，否则记「下载此刻」
+   */
+  async function collectTagMeta(info, track, level) {
+    const meta = {
+      title: info.name, artists: info.artists, album: info.album,
+      songId: info.id, level: qualityLabel(level),
+      no: '', total: '', track: '', disc: '', year: '', date: '', genre: '',
+      added: localStamp(Date.now()),
+      albumCover: null, songCover: null
+    };
+
+    const atMs = Number((track && (track.at || track.addTime)) || (info && info.at) || 0);
+    if (atMs > 0) meta.added = localStamp(atMs);
+    meta.genre = String(CONFIG.TAG_GENRE || '').trim();
+
+    let song = null;
+    try {
+      const list = await songDetail([info.id]);
+      song = (list && list[0]) || null;
+    } catch (e) {
+      warn('取歌曲详情失败（曲序 / 发行年可能空着）', e);
+    }
+
+    const albumId = validId((song && albumOf(song).id) || info.albumId);
+    let album = null;
+    if (albumId) {
+      try {
+        const d = await apiGet('/api/v1/album/' + albumId);
+        album = (d && d.album) || null;
+      } catch (e) {
+        warn('取专辑详情失败（总曲数 / 专辑封面可能空着）', e);
+      }
+    }
+
+    const no = Number(song && song.no) || 0;
+    const total = Number(album && album.size) || 0;
+    meta.no = no > 0 ? String(no) : '';
+    meta.total = total > 0 ? String(total) : '';
+    meta.track = trackNoText(no, total);
+
+    const cdRaw = song && song.cd;
+    const cd = Number(cdRaw);
+    if (cd > 0) meta.disc = String(cd);
+    else if (typeof cdRaw === 'string' && cdRaw.trim() && cdRaw.trim() !== '0') meta.disc = cdRaw.trim();
+
+    const pt = Number((song && song.publishTime) || (album && album.publishTime) || 0);
+    if (pt > 0) {
+      const d = new Date(pt);
+      if (!isNaN(d.getTime())) {
+        meta.year = String(d.getFullYear());
+        meta.date = meta.year + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' +
+          String(d.getDate()).padStart(2, '0');
+      }
+    }
+
+    if (!meta.genre) {
+      const tags = (album && (album.tags || album.genre)) || (song && (song.genre || (song.al && song.al.genre)));
+      const list = Array.isArray(tags) ? tags : (tags ? [tags] : []);
+      const clean = list.map((x) => String(x || '').trim()).filter(Boolean);
+      if (clean.length) meta.genre = clean[0];
+    }
+
+    // 封面：专辑封面取专辑详情那张；歌曲封面取这首歌自己的 al.picUrl
+    const albumPic = (album && album.picUrl) || (song && albumOf(song).picUrl) ||
+      info.picUrl || '';
+    const songPic = (song && albumOf(song).picUrl) || info.picUrl || albumPic;
+    meta.albumCover = await fetchCoverBytes(albumPic);
+    const same = albumPic && songPic && pic(albumPic, 1200) === pic(songPic, 1200);
+    if (!same) meta.songCover = await fetchCoverBytes(songPic);
+
+    return meta;
+  }
+
+  /** 按容器写标签；认不出的格式原样返回，并在提示里说清楚 */
+  async function tagAudioBlob(blob, meta) {
+    let bytes = null;
+    try { bytes = new Uint8Array(await blob.arrayBuffer()); }
+    catch (e) { return { blob: blob, note: '；读取音频失败，未写入歌曲信息' }; }
+
+    // 有的 FLAC 会在 fLaC 前面多垫一层 ID3v2（个别编码器这么干），先跨过去再判断
+    const off = skipId3v2(bytes);
+    const body = off ? bytes.subarray(off) : bytes;
+
+    let out = null;
+    let note = '';
+    let mime = blob.type || '';
+
+    if (looksFlac(body)) {
+      out = tagFlac(body, meta);
+      mime = 'audio/flac';
+    } else if (looksMp3(bytes)) {
+      out = tagMp3(bytes, meta);
+      mime = mime || 'audio/mpeg';
+    } else if (looksMp4(bytes)) {
+      return { blob: blob, note: '；m4a/mp4 暂不支持写入歌曲信息（已按原样保存）' };
+    } else {
+      return { blob: blob, note: '；未知音频封装，未写入歌曲信息（已按原样保存）' };
+    }
+
+    if (!out) return { blob: blob, note: '；写入歌曲信息失败（已按原样保存）' };
+    if (meta.albumCover || meta.songCover) note = '；已写入歌曲信息 + 封面';
+    else note = '；已写入歌曲信息（封面没取到）';
+    return { blob: new Blob([out], { type: mime }), note: note };
+  }
+
   function setDownloadUi(state) {
     const btn = document.getElementById('nm3-ctl-dl');
     if (!btn) return;
@@ -4300,25 +4730,42 @@
         blob = await res.blob();
       }
 
+      // 全功能版：把歌曲信息写进这段字节（标题 / 歌手 / 专辑 / 曲序 / 封面 / 流派 /
+      // 添加时间 / 发行年）。写失败只提示、不拦下载 —— 音频本身比标签重要。
+      let outBlob = blob;
+      let tagNote = '';
+      if (CONFIG.DOWNLOAD_TAGS) {
+        toast('正在写入歌曲信息（歌手 / 专辑 / 曲序 / 封面）…', 2000);
+        try {
+          const tagMeta = await collectTagMeta(info, track, got.level);
+          const tagged = await tagAudioBlob(blob, tagMeta);
+          outBlob = tagged.blob || blob;
+          tagNote = tagged.note || '';
+        } catch (e) {
+          warn('写入歌曲信息失败（音频照常保存）', e);
+          tagNote = '；歌曲信息写入失败，已按原样保存';
+        }
+      }
+
       // 存盘：优先写进记住的「音乐」文件夹；写不进去（句柄失效 / 权限被撤）
       // 就把这份 blob 交给 <a download>，不让用户白下一趟。
       if (dir) {
         try {
-          const saved = await writeToDir(dir, name, blob);
+          const saved = await writeToDir(dir, name, outBlob);
           // 附带歌词：音频旁边再写一份同名的双语 .lrc（本地播放器会自动加载它，
           // 靠同一时间戳两行 = 原文 + 翻译来同步显示）。写歌词失败不影响音频。
           if (CONFIG.DOWNLOAD_LRC) {
             try {
               const lrc = await writeLyricSidecar(dir, saved, info);
               toast('已下载到「' + dir.name + '」：' + saved + (lrc ? ' + ' + lrc : '') +
-                '（' + (blob.size / 1048576).toFixed(1) + ' MB）', 4000);
+                '（' + (outBlob.size / 1048576).toFixed(1) + ' MB' + tagNote + '）', 4600);
               return;
             } catch (e) {
               warn('附带歌词写失败（音频已经存好了）', e);
             }
           }
           toast('已下载到「' + dir.name + '」：' + saved +
-            '（' + (blob.size / 1048576).toFixed(1) + ' MB）', 3600);
+            '（' + (outBlob.size / 1048576).toFixed(1) + ' MB' + tagNote + '）', 4200);
           return;
         } catch (e) {
           warn('写入音乐文件夹失败，改存浏览器默认下载目录', e);
@@ -4326,8 +4773,8 @@
           toast('写入「' + dir.name + '」失败，已改存到浏览器默认下载目录', 3800);
         }
       }
-      saveBlob(blob, name);
-      toast('已下载：' + name + '（' + (blob.size / 1048576).toFixed(1) + ' MB）', 3200);
+      saveBlob(outBlob, name);
+      toast('已下载：' + name + '（' + (outBlob.size / 1048576).toFixed(1) + ' MB' + tagNote + '）', 3600);
     } catch (e) {
       warn('下载失败', e);
       if (got && got.url) {
